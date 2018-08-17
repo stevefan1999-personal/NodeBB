@@ -102,7 +102,7 @@ prestart.versionCheck();
 
 if (!configExists && process.argv[2] !== 'setup') {
 	require('./setup').webInstall();
-	return;
+	process.exit(0);
 }
 
 process.env.CONFIG = configFile;
@@ -289,7 +289,7 @@ program
 	.description('Display help for [command]')
 	.action(function (name) {
 		if (!name) {
-			return program.help();
+			process.exit(program.help());
 		}
 
 		var command = program.commands.find(function (command) { return command._name === name; });
