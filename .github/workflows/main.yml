@@ -38,8 +38,7 @@ jobs:
         # uses: docker/build-push-action@1bc1040caef9e604eb543693ba89b5bf4fc80935
         uses: docker/build-push-action@v2.6.1
         with:
-          image: ${{ secrets.DOCKERHUB_USERNAME }}/nodebb
           platforms: linux/amd64,linux/arm64/v8,linux/arm/v7
           push: true
           # List of tags
-          tags: ${{ env.GITHUB_REF_SLUG }},${{ env.GITHUB_BASE_REF_SLUG }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/nodebb:${{ env.GITHUB_REF_SLUG }},${{ secrets.DOCKERHUB_USERNAME }}/nodebb:${{ env.GITHUB_BASE_REF_SLUG }}
