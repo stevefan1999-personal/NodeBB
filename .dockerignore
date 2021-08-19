@@ -1,0 +1,11 @@
+.codeclimate.yml
+.editorconfig
+.eslint*
+test
+.git*
+.js*
+.mocha*
+*.md
+commitlint.config.js
+docker-compose.yml
+renovate.json

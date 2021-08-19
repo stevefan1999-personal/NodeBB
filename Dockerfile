@@ -1,6 +1,6 @@
-FROM node:lts
+FROM node:lts-alpine3.14 AS builder
 
-RUN mkdir -p /usr/src/app
+RUN apk add --no-cache --virtual .build-deps git python3 make gcc g++
 WORKDIR /usr/src/app
 
 ARG NODE_ENV
@@ -8,10 +8,19 @@ ENV NODE_ENV $NODE_ENV
 
 COPY install/package.json /usr/src/app/package.json
 
-RUN npm install --only=prod && \
+RUN npm install --only=prod --force && \
     npm cache clean --force
-    
-COPY . /usr/src/app
+
+FROM node:lts-alpine3.14
+
+WORKDIR /usr/src/app
+
+ARG NODE_ENV
+ENV NODE_ENV $NODE_ENV
+
+COPY --from=builder /usr/src/app/node_modules/ node_modules/
+COPY install/package.json package.json
+COPY . .
 
 ENV NODE_ENV=production \
     daemon=false \
@@ -19,4 +28,4 @@ ENV NODE_ENV=production \
 
 EXPOSE 4567
 
-CMD node ./nodebb build ;  node ./nodebb start
+CMD ["./nodebb", "build"]
