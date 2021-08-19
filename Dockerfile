@@ -1,6 +1,6 @@
 FROM node:lts-alpine3.14
 
-RUN mkdir -p /usr/src/app
+RUN apk add --no-cache git
 WORKDIR /usr/src/app
 
 ARG NODE_ENV
