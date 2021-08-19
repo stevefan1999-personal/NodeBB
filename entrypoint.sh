@@ -42,7 +42,7 @@ else
 fi
 
 if [ -f config.json ]; then
-    /usr/src/app/nodebb build --series
+    /usr/src/app/nodebb build
     /usr/src/app/nodebb upgrade -mips
 fi
 
