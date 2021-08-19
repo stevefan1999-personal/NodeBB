@@ -1,4 +1,4 @@
-FROM node:lts-buster AS builder
+FROM node:lts-bullseye AS builder
 
 WORKDIR /usr/src/app
 
@@ -7,7 +7,7 @@ COPY install/package.json /usr/src/app/package.json
 RUN yarn --prod --unsafe-perm && \
     yarn cache clean --force
 
-FROM node:lts-buster-slim
+FROM node:lts-bullseye-slim
 
 WORKDIR /usr/src/app
 
