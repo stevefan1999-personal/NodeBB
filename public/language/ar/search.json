@@ -17,6 +17,7 @@
     "at-most": "على اﻷكثر",
     "relevance": "Relevance",
     "post-time": "تاريخ المشاركة",
+    "votes": "Votes",
     "newer-than": "أحدث من",
     "older-than": "أقدم من",
     "any-date": "أي وقت",
@@ -30,6 +31,7 @@
     "sort-by": "عرض حسب",
     "last-reply-time": "تاريخ آخر رد",
     "topic-title": "عنوان الموضوع",
+    "topic-votes": "Topic votes",
     "number-of-replies": "عدد الردود",
     "number-of-views": "عدد المشاهدات",
     "topic-start-date": "تاريخ بدأ الموضوع",
@@ -41,5 +43,7 @@
     "clear-preferences": "ازالة التفضيلات",
     "search-preferences-saved": "تم حفظ تفضيلات البحث",
     "search-preferences-cleared": "تم ازالة تفضيلات البحث",
-    "show-results-as": "عرض النتائج كـ"
+    "show-results-as": "عرض النتائج كـ",
+    "see-more-results": "See more results (%1)",
+    "search-in-category": "Search in \"%1\""
 }

@@ -1,180 +1,158 @@
 'use strict';
 
-var async = require('async');
-var winston = require('winston');
-var childProcess = require('child_process');
-var _ = require('lodash');
-var CliGraph = require('cli-graph');
+const winston = require('winston');
+const childProcess = require('child_process');
+const CliGraph = require('cli-graph');
 
-var build = require('../meta/build');
-var db = require('../database');
-var plugins = require('../plugins');
-var events = require('../events');
-var analytics = require('../analytics');
-var reset = require('./reset');
+const build = require('../meta/build');
+const db = require('../database');
+const plugins = require('../plugins');
+const events = require('../events');
+const analytics = require('../analytics');
+const reset = require('./reset');
+const { pluginNamePattern, themeNamePattern } = require('../constants');
 
-function buildTargets() {
-	var aliases = build.aliases;
-	var length = 0;
-	var output = Object.keys(aliases).map(function (name) {
-		var arr = aliases[name];
-		if (name.length > length) {
-			length = name.length;
+async function activate(plugin) {
+	if (themeNamePattern.test(plugin)) {
+		await reset.reset({
+			theme: plugin,
+		});
+		process.exit();
+	}
+	try {
+		await db.init();
+		if (!pluginNamePattern.test(plugin)) {
+			// Allow omission of `nodebb-plugin-`
+			plugin = `nodebb-plugin-${plugin}`;
 		}
-
-		return [name, arr.join(', ')];
-	}).map(function (tuple) {
-		return '     ' + _.padEnd('"' + tuple[0] + '"', length + 2).magenta + '  |  ' + tuple[1];
-	}).join('\n');
-	console.log(
-		'\n\n  Build targets:\n' +
-		('\n     ' + _.padEnd('Target', length + 2) + '  |  Aliases').green +
-		'\n     ------------------------------------------------------\n'.blue +
-		output + '\n'
-	);
+		const isInstalled = await plugins.isInstalled(plugin);
+		if (!isInstalled) {
+			throw new Error('plugin not installed');
+		}
+		const isActive = await plugins.isActive(plugin);
+		if (isActive) {
+			winston.info('Plugin `%s` already active', plugin);
+			process.exit(0);
+		}
+		const numPlugins = await db.sortedSetCard('plugins:active');
+		winston.info('Activating plugin `%s`', plugin);
+		await db.sortedSetAdd('plugins:active', numPlugins, plugin);
+		await events.log({
+			type: 'plugin-activate',
+			text: plugin,
+		});
+	} catch (err) {
+		winston.error(`An error occurred during plugin activation\n${err.stack}`);
+	}
+	process.exit(0);
 }
 
-var themeNamePattern = /^(@.*?\/)?nodebb-theme-.*$/;
-var pluginNamePattern = /^(@.*?\/)?nodebb-(theme|plugin|widget|rewards)-.*$/;
+async function listPlugins() {
+	await db.init();
+	const installed = await plugins.showInstalled();
+	const installedList = installed.map(plugin => plugin.name);
+	const active = await db.getSortedSetRange('plugins:active', 0, -1);
 
-function activate(plugin) {
-	if (themeNamePattern.test(plugin)) {
-		reset.reset({
-			theme: plugin,
-		}, function (err) {
-			if (err) { throw err; }
-			process.exit();
-		});
-		return;
+	// Merge the two sets, defer to plugins in  `installed` if already present
+	const combined = installed.concat(active.reduce((memo, cur) => {
+		if (!installedList.includes(cur)) {
+			memo.push({
+				id: cur,
+				active: true,
+				installed: false,
+			});
+		}
+
+		return memo;
+	}, []));
+
+	// Alphabetical sort
+	combined.sort((a, b) => (a.id > b.id ? 1 : -1));
+
+	// Pretty output
+	process.stdout.write('Active plugins:\n');
+	combined.forEach((plugin) => {
+		process.stdout.write(`\t* ${plugin.id}${plugin.version ? `@${plugin.version}` : ''} (`);
+		process.stdout.write(plugin.installed ? 'installed'.green : 'not installed'.red);
+		process.stdout.write(', ');
+		process.stdout.write(plugin.active ? 'enabled'.green : 'disabled'.yellow);
+		process.stdout.write(')\n');
+	});
+
+	process.exit();
+}
+
+async function listEvents(count = 10) {
+	await db.init();
+	const eventData = await events.getEvents('', 0, count - 1);
+	console.log((`\nDisplaying last ${count} administrative events...`).bold);
+	eventData.forEach((event) => {
+		console.log(`  * ${String(event.timestampISO).green} ${String(event.type).yellow}${event.text ? ` ${event.text}` : ''}${' (uid: '.reset}${event.uid ? event.uid : 0})`);
+	});
+	process.exit();
+}
+
+async function info() {
+	console.log('');
+	const { version } = require('../../package.json');
+	console.log(`  version:  ${version}`);
+
+	console.log(`  Node ver: ${process.version}`);
+
+	const hash = childProcess.execSync('git rev-parse HEAD');
+	console.log(`  git hash: ${hash}`);
+
+	const config = require('../../config.json');
+	console.log(`  database: ${config.database}`);
+
+	await db.init();
+	const info = await db.info(db.client);
+
+	switch (config.database) {
+		case 'redis':
+			console.log(`        version: ${info.redis_version}`);
+			console.log(`        disk sync:  ${info.rdb_last_bgsave_status}`);
+			break;
+
+		case 'mongo':
+			console.log(`        version: ${info.version}`);
+			console.log(`        engine:  ${info.storageEngine}`);
+			break;
 	}
 
-	async.waterfall([
-		function (next) {
-			db.init(next);
+	const analyticsData = await analytics.getHourlyStatsForSet('analytics:pageviews', Date.now(), 24);
+	const graph = new CliGraph({
+		height: 12,
+		width: 25,
+		center: {
+			x: 0,
+			y: 11,
 		},
-		function (next) {
-			if (!pluginNamePattern.test(plugin)) {
-				// Allow omission of `nodebb-plugin-`
-				plugin = 'nodebb-plugin-' + plugin;
-			}
-			plugins.isInstalled(plugin, next);
-		},
-		function (isInstalled, next) {
-			if (!isInstalled) {
-				return next(new Error('plugin not installed'));
-			}
-
-			winston.info('Activating plugin `%s`', plugin);
-			db.sortedSetAdd('plugins:active', 0, plugin, next);
-		},
-		function (next) {
-			events.log({
-				type: 'plugin-activate',
-				text: plugin,
-			}, next);
-		},
-	], function (err) {
-		if (err) {
-			winston.error('An error occurred during plugin activation', err);
-			throw err;
-		}
-		process.exit(0);
 	});
-}
+	const min = Math.min(...analyticsData);
+	const max = Math.max(...analyticsData);
 
-function listPlugins() {
-	async.waterfall([
-		db.init,
-		function (next) {
-			db.getSortedSetRange('plugins:active', 0, -1, next);
-		},
-		function (plugins) {
-			winston.info('Active plugins: \n\t - ' + plugins.join('\n\t - '));
-			process.exit();
-		},
-	], function (err) {
-		throw err;
+	analyticsData.forEach((point, idx) => {
+		graph.addPoint(idx + 1, Math.round(point / max * 10));
 	});
-}
 
-function listEvents() {
-	async.series([
-		db.init,
-		events.output,
-	]);
-}
-
-function info() {
 	console.log('');
-	async.waterfall([
-		function (next) {
-			var version = require('../../package.json').version;
-			console.log('  version:  ' + version);
-
-			console.log('  Node ver: ' + process.version);
-			next();
-		},
-		function (next) {
-			var hash = childProcess.execSync('git rev-parse HEAD');
-			console.log('  git hash: ' + hash);
-			next();
-		},
-		function (next) {
-			var config = require('../../config.json');
-			console.log('  database: ' + config.database);
-			next();
-		},
-		db.init,
-		function (next) {
-			db.info(db.client, next);
-		},
-		function (info, next) {
-			var config = require('../../config.json');
-
-			switch (config.database) {
-			case 'redis':
-				console.log('        version: ' + info.redis_version);
-				console.log('        disk sync:  ' + info.rdb_last_bgsave_status);
-				break;
-
-			case 'mongo':
-				console.log('        version: ' + info.version);
-				console.log('        engine:  ' + info.storageEngine);
-				break;
-			}
-
-			next();
-		},
-		async.apply(analytics.getHourlyStatsForSet, 'analytics:pageviews', Date.now(), 24),
-		function (data, next) {
-			var graph = new CliGraph({
-				height: 12,
-				width: 25,
-				center: {
-					x: 0,
-					y: 11,
-				},
-			});
-			var min = Math.min(...data);
-			var max = Math.max(...data);
-
-			data.forEach(function (point, idx) {
-				graph.addPoint(idx + 1, Math.round(point / max * 10));
-			});
-
-			console.log('');
-			console.log(graph.toString());
-			console.log('Pageviews, last 24h (min: ' + min + '  max: ' + max + ')');
-			next();
-		},
-	], function (err) {
-		if (err) { throw err; }
-		process.exit();
-	});
+	console.log(graph.toString());
+	console.log(`Pageviews, last 24h (min: ${min}  max: ${max})`);
+	process.exit();
 }
 
-exports.build = build.build;
-exports.buildTargets = buildTargets;
+async function buildWrapper(targets, options) {
+	try {
+		await build.build(targets, options);
+		process.exit(0);
+	} catch (err) {
+		winston.error(err.stack);
+		process.exit(1);
+	}
+}
+
+exports.build = buildWrapper;
 exports.activate = activate;
 exports.listPlugins = listPlugins;
 exports.listEvents = listEvents;

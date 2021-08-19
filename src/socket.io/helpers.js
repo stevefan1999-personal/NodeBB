@@ -1,188 +1,159 @@
 'use strict';
 
-var async = require('async');
-var winston = require('winston');
+const _ = require('lodash');
 
-var db = require('../database');
-var websockets = require('./index');
-var user = require('../user');
-var posts = require('../posts');
-var topics = require('../topics');
-var privileges = require('../privileges');
-var notifications = require('../notifications');
-var plugins = require('../plugins');
-var utils = require('../utils');
+const db = require('../database');
+const websockets = require('./index');
+const user = require('../user');
+const posts = require('../posts');
+const topics = require('../topics');
+const categories = require('../categories');
+const privileges = require('../privileges');
+const notifications = require('../notifications');
+const plugins = require('../plugins');
+const utils = require('../utils');
+const batch = require('../batch');
+const apiHelpers = require('../api/helpers');
 
-var SocketHelpers = module.exports;
+const SocketHelpers = module.exports;
 
-SocketHelpers.notifyOnlineUsers = function (uid, result) {
-	winston.warn('[deprecated] SocketHelpers.notifyOnlineUsers, consider using socketHelpers.notifyNew(uid, \'newPost\', result);');
-	SocketHelpers.notifyNew(uid, 'newPost', result);
+SocketHelpers.setDefaultPostData = function (data, socket) {
+	websockets.warnDeprecated(socket, 'apiHelpers.setDefaultPostData');
+	apiHelpers.setDefaultPostData(socket, data);
 };
 
-SocketHelpers.notifyNew = function (uid, type, result) {
-	async.waterfall([
-		function (next) {
-			user.getUidsFromSet('users:online', 0, -1, next);
-		},
-		function (uids, next) {
-			privileges.topics.filterUids('read', result.posts[0].topic.tid, uids, next);
-		},
-		function (uids, next) {
-			filterTidCidIgnorers(uids, result.posts[0].topic.tid, result.posts[0].topic.cid, next);
-		},
-		function (uids, next) {
-			plugins.fireHook('filter:sockets.sendNewPostToUids', { uidsTo: uids, uidFrom: uid, type: type }, next);
-		},
-	], function (err, data) {
-		if (err) {
-			return winston.error(err.stack);
-		}
-
-		result.posts[0].ip = undefined;
-
-		data.uidsTo.forEach(function (toUid) {
-			if (parseInt(toUid, 10) !== uid) {
-				websockets.in('uid_' + toUid).emit('event:new_post', result);
-				if (result.topic && type === 'newTopic') {
-					websockets.in('uid_' + toUid).emit('event:new_topic', result.topic);
-				}
-			}
-		});
+SocketHelpers.notifyNew = async function (uid, type, result) {
+	let uids = await user.getUidsFromSet('users:online', 0, -1);
+	uids = uids.filter(toUid => parseInt(toUid, 10) !== uid);
+	await batch.processArray(uids, async (uids) => {
+		await notifyUids(uid, uids, type, result);
+	}, {
+		interval: 1000,
 	});
 };
 
-function filterTidCidIgnorers(uids, tid, cid, callback) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				topicFollowed: function (next) {
-					db.isSetMembers('tid:' + tid + ':followers', uids, next);
-				},
-				topicIgnored: function (next) {
-					db.isSetMembers('tid:' + tid + ':ignorers', uids, next);
-				},
-				categoryIgnored: function (next) {
-					db.sortedSetScores('cid:' + cid + ':ignorers', uids, next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			uids = uids.filter(function (uid, index) {
-				return results.topicFollowed[index] ||
-					(!results.topicFollowed[index] && !results.topicIgnored[index] && !results.categoryIgnored[index]);
-			});
-			next(null, uids);
-		},
-	], callback);
+async function notifyUids(uid, uids, type, result) {
+	const post = result.posts[0];
+	const { tid } = post.topic;
+	const { cid } = post.topic;
+	uids = await privileges.topics.filterUids('topics:read', tid, uids);
+	const watchStateUids = uids;
+
+	const watchStates = await getWatchStates(watchStateUids, tid, cid);
+
+	const categoryWatchStates = _.zipObject(watchStateUids, watchStates.categoryWatchStates);
+	const topicFollowState = _.zipObject(watchStateUids, watchStates.topicFollowed);
+	uids = filterTidCidIgnorers(watchStateUids, watchStates);
+	uids = await user.blocks.filterUids(uid, uids);
+	uids = await user.blocks.filterUids(post.topic.uid, uids);
+	const data = await plugins.hooks.fire('filter:sockets.sendNewPostToUids', { uidsTo: uids, uidFrom: uid, type: type });
+
+	post.ip = undefined;
+
+	data.uidsTo.forEach((toUid) => {
+		post.categoryWatchState = categoryWatchStates[toUid];
+		post.topic.isFollowing = topicFollowState[toUid];
+		websockets.in(`uid_${toUid}`).emit('event:new_post', result);
+		if (result.topic && type === 'newTopic') {
+			websockets.in(`uid_${toUid}`).emit('event:new_topic', result.topic);
+		}
+	});
 }
 
-SocketHelpers.sendNotificationToPostOwner = function (pid, fromuid, command, notification) {
+async function getWatchStates(uids, tid, cid) {
+	return await utils.promiseParallel({
+		topicFollowed: db.isSetMembers(`tid:${tid}:followers`, uids),
+		topicIgnored: db.isSetMembers(`tid:${tid}:ignorers`, uids),
+		categoryWatchStates: categories.getUidsWatchStates(cid, uids),
+	});
+}
+
+function filterTidCidIgnorers(uids, watchStates) {
+	return uids.filter((uid, index) => watchStates.topicFollowed[index] ||
+			(!watchStates.topicIgnored[index] && watchStates.categoryWatchStates[index] !== categories.watchStates.ignoring));
+}
+
+SocketHelpers.sendNotificationToPostOwner = async function (pid, fromuid, command, notification) {
 	if (!pid || !fromuid || !notification) {
 		return;
 	}
 	fromuid = parseInt(fromuid, 10);
-	var postData;
-	async.waterfall([
-		function (next) {
-			posts.getPostFields(pid, ['tid', 'uid', 'content'], next);
-		},
-		function (_postData, next) {
-			postData = _postData;
-			async.parallel({
-				canRead: async.apply(privileges.posts.can, 'read', pid, postData.uid),
-				isIgnoring: async.apply(topics.isIgnoring, [postData.tid], postData.uid),
-			}, next);
-		},
-		function (results, next) {
-			if (!results.canRead || results.isIgnoring[0] || !postData.uid || fromuid === parseInt(postData.uid, 10)) {
-				return;
-			}
-			async.parallel({
-				username: async.apply(user.getUserField, fromuid, 'username'),
-				topicTitle: async.apply(topics.getTopicField, postData.tid, 'title'),
-				postObj: async.apply(posts.parsePost, postData),
-			}, next);
-		},
-		function (results, next) {
-			var title = utils.decodeHTMLEntities(results.topicTitle);
-			var titleEscaped = title.replace(/%/g, '&#37;').replace(/,/g, '&#44;');
+	const postData = await posts.getPostFields(pid, ['tid', 'uid', 'content']);
+	const [canRead, isIgnoring] = await Promise.all([
+		privileges.posts.can('topics:read', pid, postData.uid),
+		topics.isIgnoring([postData.tid], postData.uid),
+	]);
+	if (!canRead || isIgnoring[0] || !postData.uid || fromuid === postData.uid) {
+		return;
+	}
+	const [username, topicTitle, postObj] = await Promise.all([
+		user.getUserField(fromuid, 'username'),
+		topics.getTopicField(postData.tid, 'title'),
+		posts.parsePost(postData),
+	]);
 
-			notifications.create({
-				type: command,
-				bodyShort: '[[' + notification + ', ' + results.username + ', ' + titleEscaped + ']]',
-				bodyLong: results.postObj.content,
-				pid: pid,
-				tid: postData.tid,
-				path: '/post/' + pid,
-				nid: command + ':post:' + pid + ':uid:' + fromuid,
-				from: fromuid,
-				mergeId: notification + '|' + pid,
-				topicTitle: results.topicTitle,
-			}, next);
-		},
-	], function (err, notification) {
-		if (err) {
-			return winston.error(err);
-		}
-		if (notification) {
-			notifications.push(notification, [postData.uid]);
-		}
+	const title = utils.decodeHTMLEntities(topicTitle);
+	const titleEscaped = title.replace(/%/g, '&#37;').replace(/,/g, '&#44;');
+
+	const notifObj = await notifications.create({
+		type: command,
+		bodyShort: `[[${notification}, ${username}, ${titleEscaped}]]`,
+		bodyLong: postObj.content,
+		pid: pid,
+		tid: postData.tid,
+		path: `/post/${pid}`,
+		nid: `${command}:post:${pid}:uid:${fromuid}`,
+		from: fromuid,
+		mergeId: `${notification}|${pid}`,
+		topicTitle: topicTitle,
 	});
+
+	notifications.push(notifObj, [postData.uid]);
 };
 
 
-SocketHelpers.sendNotificationToTopicOwner = function (tid, fromuid, command, notification) {
+SocketHelpers.sendNotificationToTopicOwner = async function (tid, fromuid, command, notification) {
 	if (!tid || !fromuid || !notification) {
 		return;
 	}
 
 	fromuid = parseInt(fromuid, 10);
 
-	var ownerUid;
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				username: async.apply(user.getUserField, fromuid, 'username'),
-				topicData: async.apply(topics.getTopicFields, tid, ['uid', 'slug', 'title']),
-			}, next);
-		},
-		function (results, next) {
-			if (fromuid === parseInt(results.topicData.uid, 10)) {
-				return;
-			}
-			ownerUid = results.topicData.uid;
-			var title = utils.decodeHTMLEntities(results.topicData.title);
-			var titleEscaped = title.replace(/%/g, '&#37;').replace(/,/g, '&#44;');
+	const [username, topicData] = await Promise.all([
+		user.getUserField(fromuid, 'username'),
+		topics.getTopicFields(tid, ['uid', 'slug', 'title']),
+	]);
 
-			notifications.create({
-				bodyShort: '[[' + notification + ', ' + results.username + ', ' + titleEscaped + ']]',
-				path: '/topic/' + results.topicData.slug,
-				nid: command + ':tid:' + tid + ':uid:' + fromuid,
-				from: fromuid,
-			}, next);
-		},
-	], function (err, notification) {
-		if (err) {
-			return winston.error(err);
-		}
-		if (notification && parseInt(ownerUid, 10)) {
-			notifications.push(notification, [ownerUid]);
-		}
+	if (fromuid === topicData.uid) {
+		return;
+	}
+	const ownerUid = topicData.uid;
+	const title = utils.decodeHTMLEntities(topicData.title);
+	const titleEscaped = title.replace(/%/g, '&#37;').replace(/,/g, '&#44;');
+
+	const notifObj = await notifications.create({
+		bodyShort: `[[${notification}, ${username}, ${titleEscaped}]]`,
+		path: `/topic/${topicData.slug}`,
+		nid: `${command}:tid:${tid}:uid:${fromuid}`,
+		from: fromuid,
 	});
+
+	if (ownerUid) {
+		notifications.push(notifObj, [ownerUid]);
+	}
 };
 
-SocketHelpers.upvote = function (data, notification) {
+SocketHelpers.upvote = async function (data, notification) {
 	if (!data || !data.post || !data.post.uid || !data.post.votes || !data.post.pid || !data.fromuid) {
 		return;
 	}
 
-	var votes = data.post.votes;
-	var touid = data.post.uid;
-	var fromuid = data.fromuid;
-	var pid = data.post.pid;
+	const { votes } = data.post;
+	const touid = data.post.uid;
+	const { fromuid } = data;
+	const { pid } = data.post;
 
-	var shouldNotify = {
+	const shouldNotify = {
 		all: function () {
 			return votes > 0;
 		},
@@ -193,7 +164,7 @@ SocketHelpers.upvote = function (data, notification) {
 			return votes > 0 && votes % 10 === 0;
 		},
 		threshold: function () {
-			return [1, 5, 10, 25].indexOf(votes) !== -1 || (votes >= 50 && votes % 50 === 0);
+			return [1, 5, 10, 25].includes(votes) || (votes >= 50 && votes % 50 === 0);
 		},
 		logarithmic: function () {
 			return votes > 1 && Math.log10(votes) % 1 === 0;
@@ -202,52 +173,23 @@ SocketHelpers.upvote = function (data, notification) {
 			return false;
 		},
 	};
+	const settings = await user.getSettings(touid);
+	const should = shouldNotify[settings.upvoteNotifFreq] || shouldNotify.all;
 
-	async.waterfall([
-		function (next) {
-			user.getSettings(touid, next);
-		},
-		function (settings, next) {
-			var should = shouldNotify[settings.upvoteNotifFreq] || shouldNotify.all;
-
-			if (should()) {
-				SocketHelpers.sendNotificationToPostOwner(pid, fromuid, 'upvote', notification);
-			}
-
-			next();
-		},
-	], function (err) {
-		if (err) {
-			winston.error(err);
-		}
-	});
+	if (should()) {
+		SocketHelpers.sendNotificationToPostOwner(pid, fromuid, 'upvote', notification);
+	}
 };
 
-SocketHelpers.rescindUpvoteNotification = function (pid, fromuid) {
-	var uid;
-	async.waterfall([
-		function (next) {
-			notifications.rescind('upvote:post:' + pid + ':uid:' + fromuid, next);
-		},
-		function (next) {
-			posts.getPostField(pid, 'uid', next);
-		},
-		function (_uid, next) {
-			uid = _uid;
-			user.notifications.getUnreadCount(uid, next);
-		},
-		function (count, next) {
-			websockets.in('uid_' + uid).emit('event:notifications.updateCount', count);
-			next();
-		},
-	], function (err) {
-		if (err) {
-			winston.error(err);
-		}
-	});
+SocketHelpers.rescindUpvoteNotification = async function (pid, fromuid) {
+	await notifications.rescind(`upvote:post:${pid}:uid:${fromuid}`);
+	const uid = await posts.getPostField(pid, 'uid');
+	const count = await user.notifications.getUnreadCount(uid);
+	websockets.in(`uid_${uid}`).emit('event:notifications.updateCount', count);
 };
 
-SocketHelpers.emitToTopicAndCategory = function (event, data) {
-	websockets.in('topic_' + data.tid).emit(event, data);
-	websockets.in('category_' + data.cid).emit(event, data);
+SocketHelpers.emitToUids = async function (event, data, uids) {
+	uids.forEach(toUid => websockets.in(`uid_${toUid}`).emit(event, data));
 };
+
+require('../promisify')(SocketHelpers);

@@ -1,97 +1,80 @@
 'use strict';
 
-var path = require('path');
-var async = require('async');
-var nconf = require('nconf');
-var mime = require('mime');
-var fs = require('fs');
-var jimp = require('jimp');
+const path = require('path');
+const nconf = require('nconf');
+const fs = require('fs');
 
-var meta = require('../../meta');
-var posts = require('../../posts');
-var file = require('../../file');
-var image = require('../../image');
-var plugins = require('../../plugins');
-var pagination = require('../../pagination');
+const meta = require('../../meta');
+const posts = require('../../posts');
+const file = require('../../file');
+const image = require('../../image');
+const plugins = require('../../plugins');
+const pagination = require('../../pagination');
 
-var allowedImageTypes = ['image/png', 'image/jpeg', 'image/pjpeg', 'image/jpg', 'image/gif', 'image/svg+xml'];
+const allowedImageTypes = ['image/png', 'image/jpeg', 'image/pjpeg', 'image/jpg', 'image/gif', 'image/svg+xml'];
 
-var uploadsController = module.exports;
+const uploadsController = module.exports;
 
-uploadsController.get = function (req, res, next) {
-	var currentFolder = path.join(nconf.get('upload_path'), req.query.dir || '');
+uploadsController.get = async function (req, res, next) {
+	const currentFolder = path.join(nconf.get('upload_path'), req.query.dir || '');
 	if (!currentFolder.startsWith(nconf.get('upload_path'))) {
 		return next(new Error('[[error:invalid-path]]'));
 	}
-	var itemsPerPage = 20;
-	var itemCount = 0;
-	var page = parseInt(req.query.page, 10) || 1;
-	async.waterfall([
-		function (next) {
-			fs.readdir(currentFolder, next);
-		},
-		function (files, next) {
-			files = files.filter(function (filename) {
-				return filename !== '.gitignore';
-			});
+	const itemsPerPage = 20;
+	const page = parseInt(req.query.page, 10) || 1;
+	try {
+		let files = await fs.promises.readdir(currentFolder);
+		files = files.filter(filename => filename !== '.gitignore');
+		const itemCount = files.length;
+		const start = Math.max(0, (page - 1) * itemsPerPage);
+		const stop = start + itemsPerPage;
+		files = files.slice(start, stop);
 
-			itemCount = files.length;
-			var start = Math.max(0, (page - 1) * itemsPerPage);
-			var stop = start + itemsPerPage;
-			files = files.slice(start, stop);
+		files = await filesToData(currentFolder, files);
 
-			filesToData(currentFolder, files, next);
-		},
-		function (files, next) {
-			// Float directories to the top
-			files.sort(function (a, b) {
-				if (a.isDirectory && !b.isDirectory) {
-					return -1;
-				} else if (!a.isDirectory && b.isDirectory) {
-					return 1;
-				} else if (!a.isDirectory && !b.isDirectory) {
-					return a.mtime < b.mtime ? -1 : 1;
-				}
-
-				return 0;
-			});
-
-			// Add post usage info if in /files
-			if (req.query.dir === '/files') {
-				posts.uploads.getUsage(files, function (err, usage) {
-					files.forEach(function (file, idx) {
-						file.inPids = usage[idx].map(pid => parseInt(pid, 10));
-					});
-
-					next(err, files);
-				});
-			} else {
-				setImmediate(next, null, files);
+		// Float directories to the top
+		files.sort((a, b) => {
+			if (a.isDirectory && !b.isDirectory) {
+				return -1;
+			} else if (!a.isDirectory && b.isDirectory) {
+				return 1;
+			} else if (!a.isDirectory && !b.isDirectory) {
+				return a.mtime < b.mtime ? -1 : 1;
 			}
-		},
-		function (files) {
-			res.render('admin/manage/uploads', {
-				currentFolder: currentFolder.replace(nconf.get('upload_path'), ''),
-				showPids: files.length && files[0].hasOwnProperty('inPids'),
-				files: files,
-				breadcrumbs: buildBreadcrumbs(currentFolder),
-				pagination: pagination.create(page, Math.ceil(itemCount / itemsPerPage), req.query),
+
+			return 0;
+		});
+
+		// Add post usage info if in /files
+		if (['/files', '/files/'].includes(req.query.dir)) {
+			const usage = await posts.uploads.getUsage(files);
+			files.forEach((file, idx) => {
+				file.inPids = usage[idx].map(pid => parseInt(pid, 10));
 			});
-		},
-	], next);
+		}
+		res.render('admin/manage/uploads', {
+			currentFolder: currentFolder.replace(nconf.get('upload_path'), ''),
+			showPids: files.length && files[0].hasOwnProperty('inPids'),
+			files: files,
+			breadcrumbs: buildBreadcrumbs(currentFolder),
+			pagination: pagination.create(page, Math.ceil(itemCount / itemsPerPage), req.query),
+		});
+	} catch (err) {
+		next(err);
+	}
 };
 
 function buildBreadcrumbs(currentFolder) {
-	var crumbs = [];
-	var parts = currentFolder.replace(nconf.get('upload_path'), '').split(path.sep);
-	var currentPath = '';
-	parts.forEach(function (part) {
-		var dir = path.join(currentPath, part);
+	const crumbs = [];
+	const parts = currentFolder.replace(nconf.get('upload_path'), '').split(path.sep);
+	let currentPath = '';
+	parts.forEach((part) => {
+		const dir = path.join(currentPath, part);
 		crumbs.push({
 			text: part || 'Uploads',
-			url: part
-				? (nconf.get('relative_path') + '/admin/manage/uploads?dir=' + dir)
-				: nconf.get('relative_path') + '/admin/manage/uploads',
+			url: part ?
+				(`${nconf.get('relative_path')}/admin/manage/uploads?dir=${dir}`) :
+				`${nconf.get('relative_path')}/admin/manage/uploads`,
 		});
 		currentPath = dir;
 	});
@@ -99,42 +82,33 @@ function buildBreadcrumbs(currentFolder) {
 	return crumbs;
 }
 
-function filesToData(currentDir, files, callback) {
-	async.map(files, function (file, next) {
-		var stat;
-		async.waterfall([
-			function (next) {
-				fs.stat(path.join(currentDir, file), next);
-			},
-			function (_stat, next) {
-				stat = _stat;
-				if (stat.isDirectory()) {
-					fs.readdir(path.join(currentDir, file), next);
-				} else {
-					next(null, []);
-				}
-			},
-			function (filesInDir, next) {
-				var url = nconf.get('upload_url') + currentDir.replace(nconf.get('upload_path'), '') + '/' + file;
-				next(null, {
-					name: file,
-					path: path.join(currentDir, file).replace(nconf.get('upload_path'), ''),
-					url: url,
-					fileCount: Math.max(0, filesInDir.length - 1), // ignore .gitignore
-					size: stat.size,
-					sizeHumanReadable: (stat.size / 1024).toFixed(1) + 'KiB',
-					isDirectory: stat.isDirectory(),
-					isFile: stat.isFile(),
-					mtime: stat.mtimeMs,
-				});
-			},
-		], next);
-	}, callback);
+async function filesToData(currentDir, files) {
+	return await Promise.all(files.map(file => getFileData(currentDir, file)));
 }
 
-uploadsController.uploadCategoryPicture = function (req, res, next) {
-	var uploadedFile = req.files.files[0];
-	var params = null;
+async function getFileData(currentDir, file) {
+	const stat = await fs.promises.stat(path.join(currentDir, file));
+	let filesInDir = [];
+	if (stat.isDirectory()) {
+		filesInDir = await fs.promises.readdir(path.join(currentDir, file));
+	}
+	const url = `${nconf.get('upload_url') + currentDir.replace(nconf.get('upload_path'), '')}/${file}`;
+	return {
+		name: file,
+		path: path.join(currentDir, file).replace(nconf.get('upload_path'), ''),
+		url: url,
+		fileCount: Math.max(0, filesInDir.length - 1), // ignore .gitignore
+		size: stat.size,
+		sizeHumanReadable: `${(stat.size / 1024).toFixed(1)}KiB`,
+		isDirectory: stat.isDirectory(),
+		isFile: stat.isFile(),
+		mtime: stat.mtimeMs,
+	};
+}
+
+uploadsController.uploadCategoryPicture = async function (req, res, next) {
+	const uploadedFile = req.files.files[0];
+	let params = null;
 
 	try {
 		params = JSON.parse(req.body.params);
@@ -143,94 +117,79 @@ uploadsController.uploadCategoryPicture = function (req, res, next) {
 		return next(new Error('[[error:invalid-json]]'));
 	}
 
-	if (validateUpload(req, res, next, uploadedFile, allowedImageTypes)) {
-		var filename = 'category-' + params.cid + path.extname(uploadedFile.name);
-		uploadImage(filename, 'category', uploadedFile, req, res, next);
+	if (validateUpload(res, uploadedFile, allowedImageTypes)) {
+		const filename = `category-${params.cid}${path.extname(uploadedFile.name)}`;
+		await uploadImage(filename, 'category', uploadedFile, req, res, next);
 	}
 };
 
-uploadsController.uploadFavicon = function (req, res, next) {
-	var uploadedFile = req.files.files[0];
-	var allowedTypes = ['image/x-icon', 'image/vnd.microsoft.icon'];
+uploadsController.uploadFavicon = async function (req, res, next) {
+	const uploadedFile = req.files.files[0];
+	const allowedTypes = ['image/x-icon', 'image/vnd.microsoft.icon'];
 
-	if (validateUpload(req, res, next, uploadedFile, allowedTypes)) {
-		file.saveFileToLocal('favicon.ico', 'system', uploadedFile.path, function (err, image) {
+	if (validateUpload(res, uploadedFile, allowedTypes)) {
+		try {
+			const imageObj = await file.saveFileToLocal('favicon.ico', 'system', uploadedFile.path);
+			res.json([{ name: uploadedFile.name, url: imageObj.url }]);
+		} catch (err) {
+			next(err);
+		} finally {
 			file.delete(uploadedFile.path);
-			if (err) {
-				return next(err);
-			}
-
-			res.json([{ name: uploadedFile.name, url: image.url }]);
-		});
-	}
-};
-
-uploadsController.uploadTouchIcon = function (req, res, next) {
-	var uploadedFile = req.files.files[0];
-	var allowedTypes = ['image/png'];
-	var sizes = [36, 48, 72, 96, 144, 192];
-
-	if (validateUpload(req, res, next, uploadedFile, allowedTypes)) {
-		file.saveFileToLocal('touchicon-orig.png', 'system', uploadedFile.path, function (err, imageObj) {
-			if (err) {
-				return next(err);
-			}
-
-			// Resize the image into squares for use as touch icons at various DPIs
-			async.each(sizes, function (size, next) {
-				async.series([
-					async.apply(file.saveFileToLocal, 'touchicon-' + size + '.png', 'system', uploadedFile.path),
-					async.apply(image.resizeImage, {
-						path: path.join(nconf.get('upload_path'), 'system', 'touchicon-' + size + '.png'),
-						extension: 'png',
-						width: size,
-						height: size,
-					}),
-				], next);
-			}, function (err) {
-				file.delete(uploadedFile.path);
-
-				if (err) {
-					return next(err);
-				}
-
-				res.json([{ name: uploadedFile.name, url: imageObj.url }]);
-			});
-		});
-	}
-};
-
-uploadsController.uploadLogo = function (req, res, next) {
-	upload('site-logo', req, res, next);
-};
-
-uploadsController.uploadSound = function (req, res, next) {
-	var uploadedFile = req.files.files[0];
-
-	var mimeType = mime.getType(uploadedFile.name);
-	if (!/^audio\//.test(mimeType)) {
-		return next(Error('[[error:invalid-data]]'));
-	}
-
-	async.waterfall([
-		function (next) {
-			file.saveFileToLocal(uploadedFile.name, 'sounds', uploadedFile.path, next);
-		},
-		function (uploadedSound, next) {
-			meta.sounds.build(next);
-		},
-	], function (err) {
-		file.delete(uploadedFile.path);
-		if (err) {
-			return next(err);
 		}
-		res.json([{}]);
-	});
+	}
 };
 
-uploadsController.uploadFile = function (req, res, next) {
-	var uploadedFile = req.files.files[0];
-	var params;
+uploadsController.uploadTouchIcon = async function (req, res, next) {
+	const uploadedFile = req.files.files[0];
+	const allowedTypes = ['image/png'];
+	const sizes = [36, 48, 72, 96, 144, 192, 512];
+
+	if (validateUpload(res, uploadedFile, allowedTypes)) {
+		try {
+			const imageObj = await file.saveFileToLocal('touchicon-orig.png', 'system', uploadedFile.path);
+			// Resize the image into squares for use as touch icons at various DPIs
+			for (const size of sizes) {
+				/* eslint-disable no-await-in-loop */
+				await image.resizeImage({
+					path: uploadedFile.path,
+					target: path.join(nconf.get('upload_path'), 'system', `touchicon-${size}.png`),
+					width: size,
+					height: size,
+				});
+			}
+			res.json([{ name: uploadedFile.name, url: imageObj.url }]);
+		} catch (err) {
+			next(err);
+		} finally {
+			file.delete(uploadedFile.path);
+		}
+	}
+};
+
+
+uploadsController.uploadMaskableIcon = async function (req, res, next) {
+	const uploadedFile = req.files.files[0];
+	const allowedTypes = ['image/png'];
+
+	if (validateUpload(res, uploadedFile, allowedTypes)) {
+		try {
+			const imageObj = await file.saveFileToLocal('maskableicon-orig.png', 'system', uploadedFile.path);
+			res.json([{ name: uploadedFile.name, url: imageObj.url }]);
+		} catch (err) {
+			next(err);
+		} finally {
+			file.delete(uploadedFile.path);
+		}
+	}
+};
+
+uploadsController.uploadLogo = async function (req, res, next) {
+	await upload('site-logo', req, res, next);
+};
+
+uploadsController.uploadFile = async function (req, res, next) {
+	const uploadedFile = req.files.files[0];
+	let params;
 	try {
 		params = JSON.parse(req.body.params);
 	} catch (e) {
@@ -238,87 +197,76 @@ uploadsController.uploadFile = function (req, res, next) {
 		return next(new Error('[[error:invalid-json]]'));
 	}
 
-	file.saveFileToLocal(uploadedFile.name, params.folder, uploadedFile.path, function (err, data) {
-		file.delete(uploadedFile.path);
-		if (err) {
-			return next(err);
-		}
+	try {
+		const data = await file.saveFileToLocal(uploadedFile.name, params.folder, uploadedFile.path);
 		res.json([{ url: data.url }]);
-	});
+	} catch (err) {
+		next(err);
+	} finally {
+		file.delete(uploadedFile.path);
+	}
 };
 
-uploadsController.uploadDefaultAvatar = function (req, res, next) {
-	upload('avatar-default', req, res, next);
+uploadsController.uploadDefaultAvatar = async function (req, res, next) {
+	await upload('avatar-default', req, res, next);
 };
 
-uploadsController.uploadOgImage = function (req, res, next) {
-	upload('og:image', req, res, next);
+uploadsController.uploadOgImage = async function (req, res, next) {
+	await upload('og:image', req, res, next);
 };
 
-function upload(name, req, res, next) {
-	var uploadedFile = req.files.files[0];
+async function upload(name, req, res, next) {
+	const uploadedFile = req.files.files[0];
 
-	if (validateUpload(req, res, next, uploadedFile, allowedImageTypes)) {
-		var filename = name + path.extname(uploadedFile.name);
-		uploadImage(filename, 'system', uploadedFile, req, res, next);
+	if (validateUpload(res, uploadedFile, allowedImageTypes)) {
+		const filename = name + path.extname(uploadedFile.name);
+		await uploadImage(filename, 'system', uploadedFile, req, res, next);
 	}
 }
 
-function validateUpload(req, res, next, uploadedFile, allowedTypes) {
-	if (allowedTypes.indexOf(uploadedFile.type) === -1) {
+function validateUpload(res, uploadedFile, allowedTypes) {
+	if (!allowedTypes.includes(uploadedFile.type)) {
 		file.delete(uploadedFile.path);
-		res.json({ error: '[[error:invalid-image-type, ' + allowedTypes.join('&#44; ') + ']]' });
+		res.json({ error: `[[error:invalid-image-type, ${allowedTypes.join('&#44; ')}]]` });
 		return false;
 	}
 
 	return true;
 }
 
-function uploadImage(filename, folder, uploadedFile, req, res, next) {
-	async.waterfall([
-		function (next) {
-			if (plugins.hasListeners('filter:uploadImage')) {
-				plugins.fireHook('filter:uploadImage', { image: uploadedFile, uid: req.uid }, next);
-			} else {
-				file.saveFileToLocal(filename, folder, uploadedFile.path, next);
-			}
-		},
-		function (imageData, next) {
-			// Post-processing for site-logo
-			if (path.basename(filename, path.extname(filename)) === 'site-logo' && folder === 'system') {
-				var uploadPath = path.join(nconf.get('upload_path'), folder, 'site-logo-x50.png');
-				async.series([
-					async.apply(image.resizeImage, {
-						path: uploadedFile.path,
-						target: uploadPath,
-						extension: 'png',
-						height: 50,
-					}),
-					async.apply(meta.configs.set, 'brand:emailLogo', path.join(nconf.get('upload_url'), 'system/site-logo-x50.png')),
-				], function (err) {
-					next(err, imageData);
-				});
-			} else if (path.basename(filename, path.extname(filename)) === 'og:image' && folder === 'system') {
-				jimp.read(imageData.path).then(function (image) {
-					meta.configs.setMultiple({
-						'og:image:height': image.bitmap.height,
-						'og:image:width': image.bitmap.width,
-					}, function (err) {
-						next(err, imageData);
-					});
-				}).catch(function (err) {
-					next(err);
-				});
-			} else {
-				setImmediate(next, null, imageData);
-			}
-		},
-	], function (err, image) {
-		file.delete(uploadedFile.path);
-		if (err) {
-			return next(err);
+async function uploadImage(filename, folder, uploadedFile, req, res, next) {
+	let imageData;
+	try {
+		if (plugins.hooks.hasListeners('filter:uploadImage')) {
+			imageData = await plugins.hooks.fire('filter:uploadImage', { image: uploadedFile, uid: req.uid, folder: folder });
+		} else {
+			imageData = await file.saveFileToLocal(filename, folder, uploadedFile.path);
 		}
-		res.json([{ name: uploadedFile.name, url: image.url.startsWith('http') ? image.url : nconf.get('relative_path') + image.url }]);
-	});
-}
 
+		if (path.basename(filename, path.extname(filename)) === 'site-logo' && folder === 'system') {
+			const uploadPath = path.join(nconf.get('upload_path'), folder, 'site-logo-x50.png');
+			await image.resizeImage({
+				path: uploadedFile.path,
+				target: uploadPath,
+				height: 50,
+			});
+			await meta.configs.set('brand:emailLogo', path.join(nconf.get('upload_url'), 'system/site-logo-x50.png'));
+			const size = await image.size(uploadedFile.path);
+			await meta.configs.setMultiple({
+				'brand:logo:width': size.width,
+				'brand:logo:height': size.height,
+			});
+		} else if (path.basename(filename, path.extname(filename)) === 'og:image' && folder === 'system') {
+			const size = await image.size(uploadedFile.path);
+			await meta.configs.setMultiple({
+				'og:image:width': size.width,
+				'og:image:height': size.height,
+			});
+		}
+		res.json([{ name: uploadedFile.name, url: imageData.url.startsWith('http') ? imageData.url : nconf.get('relative_path') + imageData.url }]);
+	} catch (err) {
+		next(err);
+	} finally {
+		file.delete(uploadedFile.path);
+	}
+}

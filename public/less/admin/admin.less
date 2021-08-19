@@ -16,19 +16,20 @@
 @import "./manage/registration";
 @import "./manage/users";
 @import "./manage/admins-mods";
-@import "./manage/post-queue";
 @import "./appearance/customise";
 @import "./appearance/themes";
 @import "./extend/plugins";
 @import "./extend/rewards";
 @import "./extend/widgets";
 @import "./advanced/database";
+@import "./advanced/events";
 @import "./advanced/logs";
 @import "./advanced/errors";
+@import "./advanced/hooks";
+@import "./development/info";
 @import "./settings";
 
 @import "../flags";
-@import "./manage/ip-blacklist";
 
 @import "./modules/alerts";
 @import "./modules/selectable";
@@ -115,20 +116,20 @@ body {
 		.box-header-font;
 	}
 
-	.panel {
+	.panel:not([data-container-html]) {
 		background-color: #FFF;
 		box-sizing: border-box;
 		border-radius: 3px;
 		box-shadow: 0px 1px 3px 0px rgba(165, 165, 165, 0.75);
 		margin-bottom: 20px;
 
-		&.panel-default .panel-heading {
+		&.panel-default >.panel-heading {
 			.acp-panel-heading;
 			background: #fefefe;
 			color: #333;
 		}
 
-		&.panel-danger .panel-heading {
+		&.panel-danger >.panel-heading {
 			.acp-panel-heading;
 		}
 	}
@@ -234,10 +235,14 @@ body {
 		margin: 35px 5px 0 5px;
 	}
 }
-
-.category-dropdown-menu {
-  max-height: 600px;
-  overflow-y: auto;
+[component="category-selector"] {
+	.fa-stack {
+		border-radius: 50%;
+	}
+	.category-dropdown-menu {
+		max-height: 400px;
+		overflow-y: auto;
+	}
 }
 
 .table-reordering {

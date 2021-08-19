@@ -1,15 +1,13 @@
 'use strict';
 
-var _ = require('lodash');
-var async = require('async');
-var winston = require('winston');
-var nconf = require('nconf');
-var semver = require('semver');
-var session = require('express-session');
-var redis = require('redis');
-var redisClient;
+const nconf = require('nconf');
+const semver = require('semver');
+const util = require('util');
+const session = require('express-session');
 
-var redisModule = module.exports;
+const connection = require('./redis/connection');
+
+const redisModule = module.exports;
 
 redisModule.questions = [
 	{
@@ -36,158 +34,89 @@ redisModule.questions = [
 	},
 ];
 
-redisModule.init = function (callback) {
-	callback = callback || function () { };
-	redisClient = redisModule.connect({}, function (err) {
-		if (err) {
-			winston.error('NodeBB could not connect to your Redis database. Redis returned the following error', err);
-			return callback(err);
-		}
-		redisModule.client = redisClient;
 
-		require('./redis/main')(redisClient, redisModule);
-		require('./redis/hash')(redisClient, redisModule);
-		require('./redis/sets')(redisClient, redisModule);
-		require('./redis/sorted')(redisClient, redisModule);
-		require('./redis/list')(redisClient, redisModule);
-		require('./redis/transaction')(redisClient, redisModule);
-
-		callback();
-	});
+redisModule.init = async function () {
+	redisModule.client = await connection.connect(nconf.get('redis'));
+	require('./redis/promisify')(redisModule.client);
 };
 
-redisModule.initSessionStore = function (callback) {
-	var meta = require('../meta');
-	var sessionStore = require('connect-redis')(session);
-
-	redisModule.sessionStore = new sessionStore({
-		client: redisModule.client,
+redisModule.createSessionStore = async function (options) {
+	const meta = require('../meta');
+	const sessionStore = require('connect-redis')(session);
+	const client = await connection.connect(options);
+	const store = new sessionStore({
+		client: client,
 		ttl: meta.getSessionTTLSeconds(),
 	});
-
-	if (typeof callback === 'function') {
-		callback();
-	}
+	return store;
 };
 
-redisModule.connect = function (options, callback) {
-	callback = callback || function () {};
-	var redis_socket_or_host = nconf.get('redis:host');
-	var cxn;
-	var callbackCalled = false;
-	options = options || {};
-
-	if (nconf.get('redis:password')) {
-		options.auth_pass = nconf.get('redis:password');
-	}
-
-	options = _.merge(options, nconf.get('redis:options') || {});
-
-	if (redis_socket_or_host && redis_socket_or_host.indexOf('/') >= 0) {
-		/* If redis.host contains a path name character, use the unix dom sock connection. ie, /tmp/redis.sock */
-		cxn = redis.createClient(nconf.get('redis:host'), options);
-	} else {
-		/* Else, connect over tcp/ip */
-		cxn = redis.createClient(nconf.get('redis:port'), nconf.get('redis:host'), options);
-	}
-
-	cxn.on('error', function (err) {
-		winston.error(err.stack);
-		if (!callbackCalled) {
-			callbackCalled = true;
-			callback(err);
-		}
-	});
-
-	cxn.on('ready', function () {
-		if (!callbackCalled) {
-			callbackCalled = true;
-			callback();
-		}
-	});
-
-	if (nconf.get('redis:password')) {
-		cxn.auth(nconf.get('redis:password'));
-	}
-
-	var dbIdx = parseInt(nconf.get('redis:database'), 10);
-	if (dbIdx >= 0) {
-		cxn.select(dbIdx, function (err) {
-			if (err) {
-				winston.error('NodeBB could not select Redis database. Redis returned the following error', err);
-				throw err;
-			}
-		});
-	}
-
-	return cxn;
-};
-
-redisModule.createIndices = function (callback) {
-	setImmediate(callback);
-};
-
-redisModule.checkCompatibility = function (callback) {
-	async.waterfall([
-		function (next) {
-			redisModule.info(redisModule.client, next);
-		},
-		function (info, next) {
-			redisModule.checkCompatibilityVersion(info.redis_version, next);
-		},
-	], callback);
+redisModule.checkCompatibility = async function () {
+	const info = await redisModule.info(redisModule.client);
+	await redisModule.checkCompatibilityVersion(info.redis_version);
 };
 
 redisModule.checkCompatibilityVersion = function (version, callback) {
 	if (semver.lt(version, '2.8.9')) {
-		return callback(new Error('Your Redis version is not new enough to support NodeBB, please upgrade Redis to v2.8.9 or higher.'));
+		callback(new Error('Your Redis version is not new enough to support NodeBB, please upgrade Redis to v2.8.9 or higher.'));
 	}
 	callback();
 };
 
-redisModule.close = function (callback) {
-	callback = callback || function () {};
-	redisClient.quit(function (err) {
-		callback(err);
-	});
+redisModule.close = async function () {
+	await redisModule.client.async.quit();
 };
 
-redisModule.info = function (cxn, callback) {
+redisModule.info = async function (cxn) {
 	if (!cxn) {
-		return callback();
+		cxn = await connection.connect(nconf.get('redis'));
 	}
-	async.waterfall([
-		function (next) {
-			cxn.info(next);
-		},
-		function (data, next) {
-			var lines = data.toString().split('\r\n').sort();
-			var redisData = {};
-			lines.forEach(function (line) {
-				var parts = line.split(':');
-				if (parts[1]) {
-					redisData[parts[0]] = parts[1];
-				}
-			});
-			redisData.used_memory_human = (redisData.used_memory / (1024 * 1024 * 1024)).toFixed(3);
-			redisData.raw = JSON.stringify(redisData, null, 4);
-			redisData.redis = true;
+	redisModule.client = redisModule.client || cxn;
+	const infoAsync = util.promisify(cb => cxn.info(cb));
+	const data = await infoAsync();
+	const lines = data.toString().split('\r\n').sort();
+	const redisData = {};
+	lines.forEach((line) => {
+		const parts = line.split(':');
+		if (parts[1]) {
+			redisData[parts[0]] = parts[1];
+		}
+	});
 
-			next(null, redisData);
-		},
-	], callback);
+	const keyInfo = redisData[`db${nconf.get('redis:database')}`];
+	if (keyInfo) {
+		const split = keyInfo.split(',');
+		redisData.keys = (split[0] || '').replace('keys=', '');
+		redisData.expires = (split[1] || '').replace('expires=', '');
+		redisData.avg_ttl = (split[2] || '').replace('avg_ttl=', '');
+	}
+
+	redisData.instantaneous_input = (redisData.instantaneous_input_kbps / 1024).toFixed(3);
+	redisData.instantaneous_output = (redisData.instantaneous_output_kbps / 1024).toFixed(3);
+
+	redisData.total_net_input = (redisData.total_net_input_bytes / (1024 * 1024 * 1024)).toFixed(3);
+	redisData.total_net_output = (redisData.total_net_output_bytes / (1024 * 1024 * 1024)).toFixed(3);
+
+	redisData.used_memory_human = (redisData.used_memory / (1024 * 1024 * 1024)).toFixed(3);
+	redisData.raw = JSON.stringify(redisData, null, 4);
+	redisData.redis = true;
+	return redisData;
 };
 
-redisModule.socketAdapter = function () {
-	var redisAdapter = require('socket.io-redis');
-	var pub = redisModule.connect();
-	var sub = redisModule.connect();
-	return redisAdapter({
-		key: 'db:' + nconf.get('redis:database') + ':adapter_key',
-		pubClient: pub,
-		subClient: sub,
+redisModule.socketAdapter = async function () {
+	const redisAdapter = require('@socket.io/redis-adapter');
+	const pub = await connection.connect(nconf.get('redis'));
+	const sub = await connection.connect(nconf.get('redis'));
+	return redisAdapter(pub, sub, {
+		key: `db:${nconf.get('redis:database')}:adapter_key`,
 	});
 };
 
-redisModule.helpers = redisModule.helpers || {};
-redisModule.helpers.redis = require('./redis/helpers');
+require('./redis/main')(redisModule);
+require('./redis/hash')(redisModule);
+require('./redis/sets')(redisModule);
+require('./redis/sorted')(redisModule);
+require('./redis/list')(redisModule);
+require('./redis/transaction')(redisModule);
+
+require('../promisify')(redisModule, ['client', 'sessionStore']);

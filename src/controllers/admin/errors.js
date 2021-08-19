@@ -1,33 +1,25 @@
 'use strict';
 
-var async = require('async');
-var json2csv = require('json-2-csv').json2csv;
+const json2csvAsync = require('json2csv').parseAsync;
 
-var meta = require('../../meta');
-var analytics = require('../../analytics');
+const meta = require('../../meta');
+const analytics = require('../../analytics');
+const utils = require('../../utils');
 
-var errorsController = module.exports;
+const errorsController = module.exports;
 
-errorsController.get = function (req, res, next) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				'not-found': async.apply(meta.errors.get, true),
-				analytics: async.apply(analytics.getErrorAnalytics),
-			}, next);
-		},
-		function (data) {
-			res.render('admin/advanced/errors', data);
-		},
-	], next);
+errorsController.get = async function (req, res) {
+	const data = await utils.promiseParallel({
+		'not-found': meta.errors.get(true),
+		analytics: analytics.getErrorAnalytics(),
+	});
+	res.render('admin/advanced/errors', data);
 };
 
-errorsController.export = function (req, res, next) {
-	async.waterfall([
-		async.apply(meta.errors.get, false),
-		async.apply(json2csv),
-		function (csv) {
-			res.set('Content-Type', 'text/csv').set('Content-Disposition', 'attachment; filename="404.csv"').send(csv);
-		},
-	], next);
+errorsController.export = async function (req, res) {
+	const data = await meta.errors.get(false);
+	const fields = data.length ? Object.keys(data[0]) : [];
+	const opts = { fields };
+	const csv = await json2csvAsync(data, opts);
+	res.set('Content-Type', 'text/csv').set('Content-Disposition', 'attachment; filename="404.csv"').send(csv);
 };

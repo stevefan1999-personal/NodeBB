@@ -1,14 +1,15 @@
 {
 	"state": "وضعیت",
-	"reporter": "کاربر گزارش دهنده",
-	"reported-at": "گزارش شده در",
-	"description": "شرح",
+	"reports": "گزارش ها",
+	"first-reported": "اولین گزارش",
 	"no-flags": "هووووورا ! هیچ گزارشی یافت نشد.",
 	"assignee": "اختصاص دادن ",
 	"update": "به روزرسانی",
 	"updated": "به روز رسانی شد",
+	"resolved": "Resolved",
 	"target-purged": "محتوای این گزارش حذف شده است و در دسترس نیست.",
 
+	"graph-label": "آمار گزارش های روزانه",
 	"quick-filters": "فیلتر های سریع",
 	"filter-active": "یک یا تعداد بیشتری از فیلتر ها در لیست گزارش ها فعال هستند",
 	"filter-reset": "حذف فیلتر ها",
@@ -25,12 +26,18 @@
 	"filter-quick-mine": "رسیدگی شده توسط من",
 	"filter-cid-all": "همه دسته بندی ها",
 	"apply-filters": "اعمال فیلتر ها",
+	"more-filters": "فیلترهای بیشتر",
+	"fewer-filters": "Fewer Filters",
 
-	"quick-links": "لینک های سریع",
+	"quick-actions": "Quick Actions",
 	"flagged-user": "کاربر گزارش شده",
 	"view-profile": "نمایش پروفایل",
 	"start-new-chat": "شروع چت جدید",
 	"go-to-target": "مشاهده محتوای گزارش شده",
+	"assign-to-me": "اختصاص بده به من",
+	"delete-post": "حذف پست",
+	"purge-post": "پاک کردن پست",
+	"restore-post": "برگرداندن پست",
 
 	"user-view": "نمایش پروفایل",
 	"user-edit": "ویرایش پروفایل",
@@ -38,9 +45,11 @@
 	"notes": "یادداشت های گزارش",
 	"add-note": "افزودن یادداشت",
 	"no-notes": "بدون یادداشت",
+	"delete-note-confirm": "آیا مطمئن هستید میخواهید این یادداشت را حذف کنید؟",
+	"note-added": "یادداشت افزوده شد",
+	"note-deleted": "یادداشت حذف شد",
 
-	"history": "تاریخچه گزارش ",
-	"back": "بازگشت به لیست گزارش ها",
+	"history": "Account &amp; Flag History",
 	"no-history": "بدون تاریخچه گزارش",
 
 	"state-all": "همه وضعیت ها",
@@ -49,9 +58,18 @@
 	"state-resolved": "حل شده",
 	"state-rejected": "رد شده",
 	"no-assignee": "اختصاص داده نشده",
-	"note-added": "یادداشت افزوده شد",
 
-	"modal-title": "گزارش محتوای نامناسب",
+	"sort": "مرتب سازی بر اساس",
+	"sort-newest": "جدیدترین ها",
+	"sort-oldest": "قدیمی ترین ها",
+	"sort-reports": "بیشترین تعداد گزارش",
+	"sort-all": "انواع گزارش ها",
+	"sort-posts-only": "فقط پست ها",
+	"sort-downvotes": "بیشترین رای های منفی",
+	"sort-upvotes": "بیشترین رای های مثبت",
+	"sort-replies": "بیشترین پاسخ به پست",
+
+	"modal-title": "Report Content",
 	"modal-body": "لطفا علت گزارش <strong>%2</strong> <strong>%1</strong> را برای بررسی مشخص کنید. همچنین می توانید از یکی از دکمه های ارسال سریع استفاده کنید.",
 	"modal-reason-spam": "هرزنامه",
 	"modal-reason-offensive": "توهین آمیز",
@@ -59,7 +77,9 @@
 	"modal-reason-custom": "علت گزارش این محتوا...",
 	"modal-submit": "ارسال گزارش",
 	"modal-submit-success": "محتوا برای بررسی گزارش شد",
-	"modal-submit-confirm": "تأیید ارسال",
-	"modal-submit-confirm-text": "شما همواره علت دیگری را مشخص کردید. آیا مطمئن هستید که می خواهید از طریق گزینه های گزارش سریع ارسال کنید؟",
-	"modal-submit-confirm-text-help": "ارسال از طریق گزارش سریع جایگزین علت های مشخص شده دیگر می شود."
+
+	"bulk-actions": "عملیات گروهی",
+	"bulk-resolve": "Resolve Flag(s)",
+	"bulk-success": "%1 گزارش بروزرسانی شد",
+	"flagged-timeago-readable": "گزارش شده <span class=\"timeago\" title=\"%1\"></span> (%2)"
 }

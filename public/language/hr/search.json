@@ -17,6 +17,7 @@
     "at-most": "Najviše",
     "relevance": "Relevantno",
     "post-time": "Vrijeme objave",
+    "votes": "Votes",
     "newer-than": "Novije od",
     "older-than": "Starije od",
     "any-date": "Bilo kada",
@@ -30,6 +31,7 @@
     "sort-by": "Sortiraj po",
     "last-reply-time": "Vrijeme zadnje odgovora",
     "topic-title": "Naslov teme",
+    "topic-votes": "Topic votes",
     "number-of-replies": "Broj odgovora",
     "number-of-views": "Broj pogleda",
     "topic-start-date": "Početak teme",
@@ -41,5 +43,7 @@
     "clear-preferences": "Očisti postavke",
     "search-preferences-saved": "Postavke pretraživanja spremljene",
     "search-preferences-cleared": "Postavke pretraživanja očišćene ",
-    "show-results-as": "Prikaži rezultate kao"
+    "show-results-as": "Prikaži rezultate kao",
+    "see-more-results": "See more results (%1)",
+    "search-in-category": "Search in \"%1\""
 }

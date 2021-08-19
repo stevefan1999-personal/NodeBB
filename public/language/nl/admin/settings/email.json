@@ -22,6 +22,8 @@
 	"smtp-transport.username": "Gebruikersnaam",
 	"smtp-transport.username-help": "<b>For the Gmail service,</b> voer het volledige email adres in, in het bijzonder als je gebruik maakt van een Google Apps managed domain.",
 	"smtp-transport.password": "Wachtwoord",
+	"smtp-transport.pool": "Enable pooled connections",
+	"smtp-transport.pool-help": "Pooling connections prevents NodeBB from creating a new connection for every email. This option only applies if SMTP Transport is enabled.",
 
 	"template": "Aanpassen E-mail Template",
 	"template.select": "Selecteer E-mail Template",
@@ -30,8 +32,11 @@
 	"testing.select": "Selecteer E-mail Template",
 	"testing.send": "Verzend Test E-mail",
 	"testing.send-help": "De test mail zal worden verstuurd naar het email adres van de op dit moment ingelogde gebruiker.",
-	"subscriptions": "E-mail abonnementen",
-	"subscriptions.disable": "Schakel subscriber notificatie e-mails uit",
+	"subscriptions": "E-mail digests",
+	"subscriptions.disable": "Schakel e-mail digests uit",
 	"subscriptions.hour": "Uur van Digest",
-	"subscriptions.hour-help": "Voer het nummer in dat het uur representeerd waarop scheduled email digests worden verstuurd (bv. <code>0</code> voor middernacht, <code>17</code> voor 17:00). Neem er s.v.p. notie van dat dit het uur is van de server self, dit hoeft niet exact overeen te komen met de klok van uw systeem.<br /> De tijd op de server is bij benadering: <span id=\"serverTime\"></span><br /> De volgende dagelijkse digest staat gepland om <span id=\"nextDigestTime\"></span>"
+	"subscriptions.hour-help": "Voer het nummer in dat het uur representeerd waarop scheduled email digests worden verstuurd (bv. <code>0</code> voor middernacht, <code>17</code> voor 17:00). Neem er s.v.p. notie van dat dit het uur is van de server self, dit hoeft niet exact overeen te komen met de klok van uw systeem.<br /> De tijd op de server is bij benadering: <span id=\"serverTime\"></span><br /> De volgende dagelijkse digest staat gepland om <span id=\"nextDigestTime\"></span>",
+	"notifications.remove-images": "Remove images from email notifications",
+	"include-unverified-emails": "Send emails to recipients who have not explicitly confirmed their emails",
+	"include-unverified-warning": "By default, users with emails associated with their account have already been verified, but there are situations where this is not the case (e.g. SSO logins, grandfathered users, etc). <strong>Enable this setting at your own risk</strong> &ndash; sending emails to unverified addresses may be a violation of regional anti-spam laws."
 }

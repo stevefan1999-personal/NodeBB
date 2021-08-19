@@ -1,18 +1,16 @@
 'use strict';
 
-var path = require('path');
-var fs = require('fs');
+const path = require('path');
+const fs = require('fs');
 
-var Logs = module.exports;
+const Logs = module.exports;
 
-Logs.path = path.join(__dirname, '..', '..', 'logs', 'output.log');
+Logs.path = path.resolve(__dirname, '../../logs/output.log');
 
-Logs.get = function (callback) {
-	fs.readFile(Logs.path, {
-		encoding: 'utf-8',
-	}, callback);
+Logs.get = async function () {
+	return await fs.promises.readFile(Logs.path, 'utf-8');
 };
 
-Logs.clear = function (callback) {
-	fs.truncate(Logs.path, 0, callback);
+Logs.clear = async function () {
+	return await fs.promises.truncate(Logs.path, 0);
 };

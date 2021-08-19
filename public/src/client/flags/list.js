@@ -1,38 +1,198 @@
 'use strict';
 
-/* globals define */
-
-define('forum/flags/list', ['components', 'Chart'], function (components, Chart) {
+define('forum/flags/list', ['components', 'Chart', 'categoryFilter', 'autocomplete', 'api'], function (components, Chart, categoryFilter, autocomplete, api) {
 	var Flags = {};
+
+	var selectedCids;
 
 	Flags.init = function () {
 		Flags.enableFilterForm();
-		Flags.enableChatButtons();
-		Flags.handleGraphs();
+		Flags.enableCheckboxes();
+		Flags.handleBulkActions();
+
+		selectedCids = [];
+		if (ajaxify.data.filters.hasOwnProperty('cid')) {
+			selectedCids = Array.isArray(ajaxify.data.filters.cid) ?
+				ajaxify.data.filters.cid : [ajaxify.data.filters.cid];
+		}
+
+		categoryFilter.init($('[component="category/dropdown"]'), {
+			privilege: 'moderate',
+			selectedCids: selectedCids,
+			onHidden: function (data) {
+				selectedCids = data.selectedCids;
+			},
+		});
+
+		components.get('flags/list')
+			.on('click', '[data-flag-id]', function (e) {
+				if (['BUTTON', 'A'].includes(e.target.nodeName)) {
+					return;
+				}
+
+				var flagId = this.getAttribute('data-flag-id');
+				ajaxify.go('flags/' + flagId);
+			});
+
+		$('#flags-daily-wrapper').one('shown.bs.collapse', function () {
+			Flags.handleGraphs();
+		});
+
+		autocomplete.user($('#filter-assignee, #filter-targetUid, #filter-reporterId'), (ev, ui) => {
+			setTimeout(() => { ev.target.value = ui.item.user.uid; });
+		});
 	};
 
 	Flags.enableFilterForm = function () {
-		var filtersEl = components.get('flags/filters');
+		const $filtersEl = components.get('flags/filters');
 
 		// Parse ajaxify data to set form values to reflect current filters
-		for (var filter in ajaxify.data.filters) {
+		for (const filter in ajaxify.data.filters) {
 			if (ajaxify.data.filters.hasOwnProperty(filter)) {
-				filtersEl.find('[name="' + filter + '"]').val(ajaxify.data.filters[filter]);
+				$filtersEl.find('[name="' + filter + '"]').val(ajaxify.data.filters[filter]);
 			}
 		}
+		$filtersEl.find('[name="sort"]').val(ajaxify.data.sort);
 
-		filtersEl.find('button').on('click', function () {
-			var payload = filtersEl.serializeArray().filter(function (item) {
-				return !!item.value;
+		document.getElementById('apply-filters').addEventListener('click', function () {
+			const payload = $filtersEl.serializeArray();
+			// cid is special comes from categoryFilter module
+			selectedCids.forEach(function (cid) {
+				payload.push({ name: 'cid', value: cid });
 			});
-			ajaxify.go('flags?' + $.param(payload));
+
+			ajaxify.go('flags?' + (payload.length ? $.param(payload) : 'reset=1'));
+		});
+
+		$filtersEl.find('button[data-target="#more-filters"]').click((ev) => {
+			const textVariant = ev.target.getAttribute('data-text-variant');
+			if (!textVariant) {
+				return;
+			}
+			ev.target.setAttribute('data-text-variant', ev.target.textContent);
+			ev.target.firstChild.textContent = textVariant;
 		});
 	};
 
-	Flags.enableChatButtons = function () {
-		$('[data-chat]').on('click', function () {
-			app.newChat(this.getAttribute('data-chat'));
+	Flags.enableCheckboxes = function () {
+		var flagsList = document.querySelector('[component="flags/list"]');
+		var checkboxes = flagsList.querySelectorAll('[data-flag-id] input[type="checkbox"]');
+		var bulkEl = document.querySelector('[component="flags/bulk-actions"] button');
+		var lastClicked;
+
+		document.querySelector('[data-action="toggle-all"]').addEventListener('click', function () {
+			var state = this.checked;
+
+			checkboxes.forEach(function (el) {
+				el.checked = state;
+			});
+			bulkEl.disabled = !state;
 		});
+
+		flagsList.addEventListener('click', function (e) {
+			var subselector = e.target.closest('input[type="checkbox"]');
+			if (subselector) {
+				// Stop checkbox clicks from going into the flag details
+				e.stopImmediatePropagation();
+
+				if (lastClicked && e.shiftKey && lastClicked !== subselector) {
+					// Select all the checkboxes in between
+					var state = subselector.checked;
+					var started = false;
+
+					checkboxes.forEach(function (el) {
+						if ([subselector, lastClicked].some(function (ref) {
+							return ref === el;
+						})) {
+							started = !started;
+						}
+
+						if (started) {
+							el.checked = state;
+						}
+					});
+				}
+
+				// (De)activate bulk actions button based on checkboxes' state
+				bulkEl.disabled = !Array.prototype.some.call(checkboxes, function (el) {
+					return el.checked;
+				});
+
+				lastClicked = subselector;
+			}
+
+			// If you miss the checkbox, don't descend into the flag details, either
+			if (e.target.querySelector('input[type="checkbox"]')) {
+				e.stopImmediatePropagation();
+			}
+		});
+	};
+
+	Flags.handleBulkActions = function () {
+		document.querySelector('[component="flags/bulk-actions"]').addEventListener('click', function (e) {
+			var subselector = e.target.closest('[data-action]');
+			if (subselector) {
+				var action = subselector.getAttribute('data-action');
+				var flagIds = Flags.getSelected();
+				var promises = [];
+
+				// TODO: this can be better done with flagIds.map to return promises
+				flagIds.forEach(function (flagId) {
+					promises.push(new Promise(function (resolve, reject) {
+						var handler = function (err) {
+							if (err) {
+								reject(err);
+							}
+
+							resolve(arguments[1]);
+						};
+
+						switch (action) {
+							case 'bulk-assign':
+								api.put(`/flags/${flagId}`, {
+									assignee: app.user.uid,
+								}, handler);
+								break;
+
+							case 'bulk-mark-resolved':
+								api.put(`/flags/${flagId}`, {
+									state: 'resolved',
+								}, handler);
+								break;
+						}
+					}));
+				});
+
+				Promise.allSettled(promises).then(function (results) {
+					var fulfilled = results.filter(function (res) {
+						return res.status === 'fulfilled';
+					}).length;
+					var errors = results.filter(function (res) {
+						return res.status === 'rejected';
+					});
+					if (fulfilled) {
+						app.alertSuccess('[[flags:bulk-success, ' + fulfilled + ']]');
+						ajaxify.refresh();
+					}
+
+					errors.forEach(function (res) {
+						app.alertError(res.reason);
+					});
+				});
+			}
+		});
+	};
+
+	Flags.getSelected = function () {
+		var checkboxes = document.querySelectorAll('[component="flags/list"] [data-flag-id] input[type="checkbox"]');
+		var payload = [];
+		checkboxes.forEach(function (el) {
+			if (el.checked) {
+				payload.push(el.closest('[data-flag-id]').getAttribute('data-flag-id'));
+			}
+		});
+
+		return payload;
 	};
 
 	Flags.handleGraphs = function () {
@@ -76,6 +236,7 @@ define('forum/flags/list', ['components', 'Chart'], function (components, Chart)
 					yAxes: [{
 						ticks: {
 							beginAtZero: true,
+							precision: 0,
 						},
 					}],
 				},

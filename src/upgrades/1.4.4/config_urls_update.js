@@ -1,8 +1,8 @@
 'use strict';
 
-var db = require('../../database');
+const async = require('async');
+const db = require('../../database');
 
-var async = require('async');
 
 module.exports = {
 	name: 'Upgrading config urls to use assets route',
@@ -17,10 +17,10 @@ module.exports = {
 					return cb();
 				}
 
-				var keys = ['brand:favicon', 'brand:touchicon', 'og:image', 'brand:logo:url', 'defaultAvatar', 'profile:defaultCovers'];
+				const keys = ['brand:favicon', 'brand:touchicon', 'og:image', 'brand:logo:url', 'defaultAvatar', 'profile:defaultCovers'];
 
-				keys.forEach(function (key) {
-					var oldValue = config[key];
+				keys.forEach((key) => {
+					const oldValue = config[key];
 
 					if (!oldValue || typeof oldValue !== 'string') {
 						return;

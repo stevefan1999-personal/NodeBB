@@ -1,6 +1,8 @@
 'use strict';
 
-define('admin/manage/admins-mods', ['translator', 'benchpress', 'autocomplete'], function (translator, Benchpress, autocomplete) {
+define('admin/manage/admins-mods', [
+	'autocomplete', 'api', 'bootbox', 'categorySelector',
+], function (autocomplete, api, bootbox, categorySelector) {
 	var AdminsMods = {};
 
 	AdminsMods.init = function () {
@@ -42,13 +44,7 @@ define('admin/manage/admins-mods', ['translator', 'benchpress', 'autocomplete'],
 		});
 
 		autocomplete.user($('#global-mod-search'), function (ev, ui) {
-			socket.emit('admin.groups.join', {
-				groupName: 'Global Moderators',
-				uid: ui.item.user.uid,
-			}, function (err) {
-				if (err) {
-					return app.alertError(err.message);
-				}
+			api.put('/groups/global-moderators/membership/' + ui.item.user.uid).then(() => {
 				app.alertSuccess('[[admin/manage/users:alerts.make-global-mod-success]]');
 				$('#global-mod-search').val('');
 
@@ -60,7 +56,7 @@ define('admin/manage/admins-mods', ['translator', 'benchpress', 'autocomplete'],
 					$('.global-moderator-area').prepend(html);
 					$('#no-global-mods-warning').addClass('hidden');
 				});
-			});
+			}).catch(app.alertError);
 		});
 
 		$('.global-moderator-area').on('click', '.remove-user-icon', function () {
@@ -69,27 +65,31 @@ define('admin/manage/admins-mods', ['translator', 'benchpress', 'autocomplete'],
 
 			bootbox.confirm('[[admin/manage/users:alerts.confirm-remove-global-mod]]', function (confirm) {
 				if (confirm) {
-					socket.emit('admin.groups.leave', { uid: uid, groupName: 'Global Moderators' }, function (err) {
-						if (err) {
-							return app.alertError(err.message);
-						}
+					api.del('/groups/global-moderators/membership/' + uid).then(() => {
 						app.alertSuccess('[[admin/manage/users:alerts.remove-global-mod-success]]');
 						userCard.remove();
 						if (!$('.global-moderator-area').children().length) {
 							$('#no-global-mods-warning').removeClass('hidden');
 						}
-					});
+					}).catch(app.alertError);
 				}
 			});
 		});
 
+
+		categorySelector.init($('[component="category-selector"]'), {
+			onSelect: function (selectedCategory) {
+				ajaxify.go('admin/manage/admins-mods' + (selectedCategory.cid ? '?cid=' + selectedCategory.cid : ''));
+			},
+			localCategories: [],
+		});
 
 		autocomplete.user($('.moderator-search'), function (ev, ui) {
 			var input = $(ev.target);
 			var cid = $(ev.target).attr('data-cid');
 			socket.emit('admin.categories.setPrivilege', {
 				cid: cid,
-				privilege: ['moderate'],
+				privilege: ajaxify.data.allPrivileges,
 				set: true,
 				member: ui.item.user.uid,
 			}, function (err) {
@@ -103,7 +103,7 @@ define('admin/manage/admins-mods', ['translator', 'benchpress', 'autocomplete'],
 					return;
 				}
 
-				app.parseAndTranslate('admin/manage/admins-mods', 'globalMods', { globalMods: [ui.item.user] }, function (html) {
+				app.parseAndTranslate('admin/manage/admins-mods', 'globalMods.members', { globalMods: { members: [ui.item.user] } }, function (html) {
 					$('.moderator-area[data-cid="' + cid + '"]').prepend(html);
 					$('.no-moderator-warning[data-cid="' + cid + '"]').addClass('hidden');
 				});
@@ -120,7 +120,7 @@ define('admin/manage/admins-mods', ['translator', 'benchpress', 'autocomplete'],
 				if (confirm) {
 					socket.emit('admin.categories.setPrivilege', {
 						cid: cid,
-						privilege: ['moderate'],
+						privilege: ajaxify.data.allPrivileges,
 						set: false,
 						member: uid,
 					}, function (err) {

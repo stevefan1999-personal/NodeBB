@@ -1,96 +1,83 @@
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
+const validator = require('validator');
+const nconf = require('nconf');
 
-var user = require('../user');
-var topics = require('../topics');
-var privileges = require('../privileges');
-var pagination = require('../pagination');
-var helpers = require('./helpers');
+const meta = require('../meta');
+const user = require('../user');
+const categories = require('../categories');
+const topics = require('../topics');
+const privileges = require('../privileges');
+const pagination = require('../pagination');
+const utils = require('../utils');
+const helpers = require('./helpers');
 
-var tagsController = module.exports;
+const tagsController = module.exports;
 
-tagsController.getTag = function (req, res, next) {
-	var tag = validator.escape(String(req.params.tag));
-	var page = parseInt(req.query.page, 10) || 1;
+tagsController.getTag = async function (req, res) {
+	const tag = validator.escape(utils.cleanUpTag(req.params.tag, meta.config.maximumTagLength));
+	const page = parseInt(req.query.page, 10) || 1;
+	const cid = Array.isArray(req.query.cid) || !req.query.cid ? req.query.cid : [req.query.cid];
 
-	var templateData = {
+	const templateData = {
 		topics: [],
 		tag: tag,
 		breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[tags:tags]]', url: '/tags' }, { text: tag }]),
-		title: '[[pages:tag, ' + tag + ']]',
+		title: `[[pages:tag, ${tag}]]`,
 	};
-	var settings;
-	var topicCount = 0;
-	async.waterfall([
-		function (next) {
-			user.getSettings(req.uid, next);
-		},
-		function (_settings, next) {
-			settings = _settings;
-			var start = Math.max(0, (page - 1) * settings.topicsPerPage);
-			var stop = start + settings.topicsPerPage - 1;
-			templateData.nextStart = stop + 1;
-			async.parallel({
-				topicCount: function (next) {
-					topics.getTagTopicCount(req.params.tag, next);
-				},
-				tids: function (next) {
-					topics.getTagTids(req.params.tag, start, stop, next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			if (Array.isArray(results.tids) && !results.tids.length) {
-				return res.render('tag', templateData);
-			}
-			topicCount = results.topicCount;
-			topics.getTopics(results.tids, req.uid, next);
-		},
-		function (topics) {
-			res.locals.metaTags = [
-				{
-					name: 'title',
-					content: tag,
-				},
-				{
-					property: 'og:title',
-					content: tag,
-				},
-			];
-			templateData.topics = topics;
+	const [settings, cids, categoryData, isPrivileged] = await Promise.all([
+		user.getSettings(req.uid),
+		cid || categories.getCidsByPrivilege('categories:cid', req.uid, 'topics:read'),
+		helpers.getSelectedCategory(cid),
+		user.isPrivileged(req.uid),
+	]);
+	const start = Math.max(0, (page - 1) * settings.topicsPerPage);
+	const stop = start + settings.topicsPerPage - 1;
 
-			var pageCount =	Math.max(1, Math.ceil(topicCount / settings.topicsPerPage));
-			templateData.pagination = pagination.create(page, pageCount);
+	const [topicCount, tids] = await Promise.all([
+		topics.getTagTopicCount(tag, cids),
+		topics.getTagTidsByCids(tag, cids, start, stop),
+	]);
 
-			res.render('tag', templateData);
+	templateData.topics = await topics.getTopics(tids, req.uid);
+	templateData.showSelect = isPrivileged;
+	templateData.showTopicTools = isPrivileged;
+	templateData.allCategoriesUrl = `tags/${tag}${helpers.buildQueryString(req.query, 'cid', '')}`;
+	templateData.selectedCategory = categoryData.selectedCategory;
+	templateData.selectedCids = categoryData.selectedCids;
+	topics.calculateTopicIndices(templateData.topics, start);
+	res.locals.metaTags = [
+		{
+			name: 'title',
+			content: tag,
 		},
-	], next);
+		{
+			property: 'og:title',
+			content: tag,
+		},
+	];
+
+	const pageCount = Math.max(1, Math.ceil(topicCount / settings.topicsPerPage));
+	templateData.pagination = pagination.create(page, pageCount, req.query);
+	helpers.addLinkTags({ url: `tags/${tag}`, res: req.res, tags: templateData.pagination.rel });
+
+	templateData['feeds:disableRSS'] = meta.config['feeds:disableRSS'];
+	templateData.rssFeedUrl = `${nconf.get('relative_path')}/tags/${tag}.rss`;
+	res.render('tag', templateData);
 };
 
-tagsController.getTags = function (req, res, next) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				canSearch: function (next) {
-					privileges.global.can('search:tags', req.uid, next);
-				},
-				tags: function (next) {
-					topics.getTags(0, 99, next);
-				},
-			}, next);
-		},
-		function (results) {
-			results.tags = results.tags.filter(Boolean);
-			var data = {
-				tags: results.tags,
-				displayTagSearch: results.canSearch,
-				nextStart: 100,
-				breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[tags:tags]]' }]),
-				title: '[[pages:tags]]',
-			};
-			res.render('tags', data);
-		},
-	], next);
+tagsController.getTags = async function (req, res) {
+	const cids = await categories.getCidsByPrivilege('categories:cid', req.uid, 'topics:read');
+	const [canSearch, tags] = await Promise.all([
+		privileges.global.can('search:tags', req.uid),
+		topics.getCategoryTagsData(cids, 0, 99),
+	]);
+
+	res.render('tags', {
+		tags: tags.filter(Boolean),
+		displayTagSearch: canSearch,
+		nextStart: 100,
+		breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[tags:tags]]' }]),
+		title: '[[pages:tags]]',
+	});
 };

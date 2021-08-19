@@ -1,19 +1,18 @@
 'use strict';
 
-var plugins = require('./plugins');
-var db = require('./database');
-var async = require('async');
+const plugins = require('./plugins');
+const db = require('./database');
 
-var social = module.exports;
+const social = module.exports;
 
 social.postSharing = null;
 
-social.getPostSharing = function (callback) {
+social.getPostSharing = async function () {
 	if (social.postSharing) {
-		return callback(null, social.postSharing);
+		return social.postSharing;
 	}
 
-	var networks = [
+	let networks = [
 		{
 			id: 'facebook',
 			name: 'Facebook',
@@ -24,59 +23,29 @@ social.getPostSharing = function (callback) {
 			name: 'Twitter',
 			class: 'fa-twitter',
 		},
-		{
-			id: 'google',
-			name: 'Google+',
-			class: 'fa-google-plus',
-		},
 	];
+	networks = await plugins.hooks.fire('filter:social.posts', networks);
+	const activated = await db.getSetMembers('social:posts.activated');
+	networks.forEach((network) => {
+		network.activated = activated.includes(network.id);
+	});
 
-	async.waterfall([
-		function (next) {
-			plugins.fireHook('filter:social.posts', networks, next);
-		},
-		function (networks, next) {
-			db.getSetMembers('social:posts.activated', next);
-		},
-		function (activated, next) {
-			networks.forEach(function (network, i) {
-				networks[i].activated = (activated.indexOf(network.id) !== -1);
-			});
-
-			social.postSharing = networks;
-			next(null, networks);
-		},
-	], callback);
+	social.postSharing = networks;
+	return networks;
 };
 
-social.getActivePostSharing = function (callback) {
-	async.waterfall([
-		function (next) {
-			social.getPostSharing(next);
-		},
-		function (networks, next) {
-			networks = networks.filter(function (network) {
-				return network && network.activated;
-			});
-			next(null, networks);
-		},
-	], callback);
+social.getActivePostSharing = async function () {
+	const networks = await social.getPostSharing();
+	return networks.filter(network => network && network.activated);
 };
 
-social.setActivePostSharingNetworks = function (networkIDs, callback) {
-	async.waterfall([
-		function (next) {
-			db.delete('social:posts.activated', next);
-		},
-		function (next) {
-			if (!networkIDs.length) {
-				return next();
-			}
-			db.setAdd('social:posts.activated', networkIDs, next);
-		},
-		function (next) {
-			social.postSharing = null;
-			next();
-		},
-	], callback);
+social.setActivePostSharingNetworks = async function (networkIDs) {
+	await db.delete('social:posts.activated');
+	if (!networkIDs.length) {
+		return;
+	}
+	await db.setAdd('social:posts.activated', networkIDs);
+	social.postSharing = null;
 };
+
+require('./promisify')(social);

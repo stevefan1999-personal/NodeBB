@@ -17,6 +17,7 @@
     "at-most": "Höchstens",
     "relevance": "Relevanz",
     "post-time": "Verfaßt am",
+    "votes": "Stimmen",
     "newer-than": "Neuer als",
     "older-than": "Älter als",
     "any-date": "Beliebiger Zeitpunkt",
@@ -30,6 +31,7 @@
     "sort-by": "Sortieren nach",
     "last-reply-time": "Zeitpunkt der letzten Antwort",
     "topic-title": "Thementitel",
+    "topic-votes": "Themenstimmen",
     "number-of-replies": "Anzahl an Antworten",
     "number-of-views": "Anzahl der Aufrufe",
     "topic-start-date": "Erstelldatum des Themas",
@@ -41,5 +43,7 @@
     "clear-preferences": "Einstellungen löschen",
     "search-preferences-saved": "Sucheinstellungen gespeichert",
     "search-preferences-cleared": "Sucheinstellungen gelöscht",
-    "show-results-as": "Ergebnisse anzeigen als"
+    "show-results-as": "Ergebnisse anzeigen als",
+    "see-more-results": "Weitere Ergebnisse anzeigen (%1)",
+    "search-in-category": "Search in \"%1\""
 }

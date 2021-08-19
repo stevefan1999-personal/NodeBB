@@ -1,206 +1,168 @@
 'use strict';
 
-var async = require('async');
-var _ = require('lodash');
-
-var db = require('../database');
-var topics = require('../topics');
-var plugins = require('../plugins');
-var meta = require('../meta');
-var user = require('../user');
+const db = require('../database');
+const topics = require('../topics');
+const plugins = require('../plugins');
+const meta = require('../meta');
+const privileges = require('../privileges');
+const user = require('../user');
 
 module.exports = function (Categories) {
-	Categories.getCategoryTopics = function (data, callback) {
-		async.waterfall([
-			function (next) {
-				plugins.fireHook('filter:category.topics.prepare', data, next);
-			},
-			function (data, next) {
-				Categories.getTopicIds(data, next);
-			},
-			function (tids, next) {
-				topics.getTopicsByTids(tids, data.uid, next);
-			},
-			async.apply(user.blocks.filter, data.uid),
-			function (topics, next) {
-				if (!topics.length) {
-					return next(null, { topics: [], uid: data.uid });
-				}
+	Categories.getCategoryTopics = async function (data) {
+		let results = await plugins.hooks.fire('filter:category.topics.prepare', data);
+		const tids = await Categories.getTopicIds(results);
+		let topicsData = await topics.getTopicsByTids(tids, data.uid);
+		topicsData = await user.blocks.filter(data.uid, topicsData);
 
-				for (var i = 0; i < topics.length; i += 1) {
-					topics[i].index = data.start + i;
-				}
+		if (!topicsData.length) {
+			return { topics: [], uid: data.uid };
+		}
+		topics.calculateTopicIndices(topicsData, data.start);
 
-				plugins.fireHook('filter:category.topics.get', { cid: data.cid, topics: topics, uid: data.uid }, next);
-			},
-			function (results, next) {
-				next(null, { topics: results.topics, nextStart: data.stop + 1 });
-			},
-		], callback);
+		results = await plugins.hooks.fire('filter:category.topics.get', { cid: data.cid, topics: topicsData, uid: data.uid });
+		return { topics: results.topics, nextStart: data.stop + 1 };
 	};
 
-	Categories.getTopicIds = function (data, callback) {
-		var pinnedTids;
+	Categories.getTopicIds = async function (data) {
+		const dataForPinned = { ...data };
+		dataForPinned.start = 0;
+		dataForPinned.stop = -1;
 
-		async.waterfall([
-			function (next) {
-				var dataForPinned = _.cloneDeep(data);
-				dataForPinned.start = 0;
-				dataForPinned.stop = -1;
+		const [pinnedTids, set, direction] = await Promise.all([
+			Categories.getPinnedTids(dataForPinned),
+			Categories.buildTopicsSortedSet(data),
+			Categories.getSortedSetRangeDirection(data.sort),
+		]);
 
-				async.parallel({
-					pinnedTids: async.apply(Categories.getPinnedTids, dataForPinned),
-					set: async.apply(Categories.buildTopicsSortedSet, data),
-					direction: async.apply(Categories.getSortedSetRangeDirection, data.sort),
-				}, next);
-			},
-			function (results, next) {
-				var totalPinnedCount = results.pinnedTids.length;
+		const totalPinnedCount = pinnedTids.length;
+		const pinnedTidsOnPage = pinnedTids.slice(data.start, data.stop !== -1 ? data.stop + 1 : undefined);
+		const pinnedCountOnPage = pinnedTidsOnPage.length;
+		const topicsPerPage = data.stop - data.start + 1;
+		const normalTidsToGet = Math.max(0, topicsPerPage - pinnedCountOnPage);
 
-				pinnedTids = results.pinnedTids.slice(data.start, data.stop !== -1 ? data.stop + 1 : undefined);
+		if (!normalTidsToGet && data.stop !== -1) {
+			return pinnedTidsOnPage;
+		}
 
-				var pinnedCount = pinnedTids.length;
+		if (plugins.hooks.hasListeners('filter:categories.getTopicIds')) {
+			const result = await plugins.hooks.fire('filter:categories.getTopicIds', {
+				tids: [],
+				data: data,
+				pinnedTids: pinnedTidsOnPage,
+				allPinnedTids: pinnedTids,
+				totalPinnedCount: totalPinnedCount,
+				normalTidsToGet: normalTidsToGet,
+			});
+			return result && result.tids;
+		}
 
-				var topicsPerPage = data.stop - data.start + 1;
+		let { start } = data;
+		if (start > 0 && totalPinnedCount) {
+			start -= totalPinnedCount - pinnedCountOnPage;
+		}
 
-				var normalTidsToGet = Math.max(0, topicsPerPage - pinnedCount);
-
-				if (!normalTidsToGet && data.stop !== -1) {
-					return next(null, []);
-				}
-
-				if (plugins.hasListeners('filter:categories.getTopicIds')) {
-					return plugins.fireHook('filter:categories.getTopicIds', {
-						tids: [],
-						data: data,
-						pinnedTids: pinnedTids,
-						allPinnedTids: results.pinnedTids,
-						totalPinnedCount: totalPinnedCount,
-						normalTidsToGet: normalTidsToGet,
-					}, function (err, data) {
-						callback(err, data && data.tids);
-					});
-				}
-
-				var set = results.set;
-				var direction = results.direction;
-				var start = data.start;
-				if (start > 0 && totalPinnedCount) {
-					start -= totalPinnedCount - pinnedCount;
-				}
-
-				var stop = data.stop === -1 ? data.stop : start + normalTidsToGet - 1;
-
-				if (Array.isArray(set)) {
-					var weights = set.map(function (s, index) {
-						return index ? 0 : 1;
-					});
-					db[direction === 'highest-to-lowest' ? 'getSortedSetRevIntersect' : 'getSortedSetIntersect']({ sets: set, start: start, stop: stop, weights: weights }, next);
-				} else {
-					db[direction === 'highest-to-lowest' ? 'getSortedSetRevRange' : 'getSortedSetRange'](set, start, stop, next);
-				}
-			},
-			function (normalTids, next) {
-				normalTids = normalTids.filter(function (tid) {
-					return pinnedTids.indexOf(tid) === -1;
-				});
-
-				next(null, pinnedTids.concat(normalTids));
-			},
-		], callback);
+		const stop = data.stop === -1 ? data.stop : start + normalTidsToGet - 1;
+		let normalTids;
+		const reverse = direction === 'highest-to-lowest';
+		if (Array.isArray(set)) {
+			const weights = set.map((s, index) => (index ? 0 : 1));
+			normalTids = await db[reverse ? 'getSortedSetRevIntersect' : 'getSortedSetIntersect']({ sets: set, start: start, stop: stop, weights: weights });
+		} else {
+			normalTids = await db[reverse ? 'getSortedSetRevRange' : 'getSortedSetRange'](set, start, stop);
+		}
+		normalTids = normalTids.filter(tid => !pinnedTids.includes(tid));
+		return pinnedTidsOnPage.concat(normalTids);
 	};
 
-	Categories.getTopicCount = function (data, callback) {
-		if (plugins.hasListeners('filter:categories.getTopicCount')) {
-			return plugins.fireHook('filter:categories.getTopicCount', {
+	Categories.getTopicCount = async function (data) {
+		if (plugins.hooks.hasListeners('filter:categories.getTopicCount')) {
+			const result = await plugins.hooks.fire('filter:categories.getTopicCount', {
 				topicCount: data.category.topic_count,
 				data: data,
-			}, function (err, data) {
-				callback(err, data && data.topicCount);
 			});
+			return result && result.topicCount;
 		}
-		async.waterfall([
-			function (next) {
-				Categories.buildTopicsSortedSet(data, next);
-			},
-			function (set, next) {
-				if (Array.isArray(set)) {
-					db.sortedSetIntersectCard(set, next);
-				} else {
-					next(null, data.category.topic_count);
-				}
-			},
-		], callback);
+		const set = await Categories.buildTopicsSortedSet(data);
+		if (Array.isArray(set)) {
+			return await db.sortedSetIntersectCard(set);
+		} else if (data.targetUid && set) {
+			return await db.sortedSetCard(set);
+		}
+		return data.category.topic_count;
 	};
 
-	Categories.buildTopicsSortedSet = function (data, callback) {
-		var cid = data.cid;
-		var set = 'cid:' + cid + ':tids';
-		var sort = data.sort || (data.settings && data.settings.categoryTopicSort) || meta.config.categoryTopicSort || 'newest_to_oldest';
+	Categories.buildTopicsSortedSet = async function (data) {
+		const { cid } = data;
+		let set = `cid:${cid}:tids`;
+		const sort = data.sort || (data.settings && data.settings.categoryTopicSort) || meta.config.categoryTopicSort || 'newest_to_oldest';
 
 		if (sort === 'most_posts') {
-			set = 'cid:' + cid + ':tids:posts';
+			set = `cid:${cid}:tids:posts`;
 		} else if (sort === 'most_votes') {
-			set = 'cid:' + cid + ':tids:votes';
-		}
-
-		if (data.targetUid) {
-			set = 'cid:' + cid + ':uid:' + data.targetUid + ':tids';
+			set = `cid:${cid}:tids:votes`;
 		}
 
 		if (data.tag) {
 			if (Array.isArray(data.tag)) {
-				set = [set].concat(data.tag.map(function (tag) {
-					return 'tag:' + tag + ':topics';
-				}));
+				set = [set].concat(data.tag.map(tag => `tag:${tag}:topics`));
 			} else {
-				set = [set, 'tag:' + data.tag + ':topics'];
+				set = [set, `tag:${data.tag}:topics`];
 			}
 		}
-		plugins.fireHook('filter:categories.buildTopicsSortedSet', {
-			set: set,
-			data: data,
-		}, function (err, data) {
-			callback(err, data && data.set);
-		});
-	};
 
-	Categories.getSortedSetRangeDirection = function (sort, callback) {
-		sort = sort || 'newest_to_oldest';
-		var direction = sort === 'newest_to_oldest' || sort === 'most_posts' || sort === 'most_votes' ? 'highest-to-lowest' : 'lowest-to-highest';
-		plugins.fireHook('filter:categories.getSortedSetRangeDirection', {
-			sort: sort,
-			direction: direction,
-		}, function (err, data) {
-			callback(err, data && data.direction);
-		});
-	};
-
-	Categories.getAllTopicIds = function (cid, start, stop, callback) {
-		db.getSortedSetRange(['cid:' + cid + ':tids:pinned', 'cid:' + cid + ':tids'], start, stop, callback);
-	};
-
-	Categories.getPinnedTids = function (data, callback) {
-		if (plugins.hasListeners('filter:categories.getPinnedTids')) {
-			return plugins.fireHook('filter:categories.getPinnedTids', {
-				pinnedTids: [],
-				data: data,
-			}, function (err, data) {
-				callback(err, data && data.pinnedTids);
-			});
+		if (data.targetUid) {
+			set = (Array.isArray(set) ? set : [set]).concat([`cid:${cid}:uid:${data.targetUid}:tids`]);
 		}
 
-		db.getSortedSetRevRange('cid:' + data.cid + ':tids:pinned', data.start, data.stop, callback);
+		const result = await plugins.hooks.fire('filter:categories.buildTopicsSortedSet', {
+			set: set,
+			data: data,
+		});
+		return result && result.set;
+	};
+
+	Categories.getSortedSetRangeDirection = async function (sort) {
+		sort = sort || 'newest_to_oldest';
+		const direction = sort === 'newest_to_oldest' || sort === 'most_posts' || sort === 'most_votes' ? 'highest-to-lowest' : 'lowest-to-highest';
+		const result = await plugins.hooks.fire('filter:categories.getSortedSetRangeDirection', {
+			sort: sort,
+			direction: direction,
+		});
+		return result && result.direction;
+	};
+
+	Categories.getAllTopicIds = async function (cid, start, stop) {
+		return await db.getSortedSetRange([`cid:${cid}:tids:pinned`, `cid:${cid}:tids`], start, stop);
+	};
+
+	Categories.getPinnedTids = async function (data) {
+		if (plugins.hooks.hasListeners('filter:categories.getPinnedTids')) {
+			const result = await plugins.hooks.fire('filter:categories.getPinnedTids', {
+				pinnedTids: [],
+				data: data,
+			});
+			return result && result.pinnedTids;
+		}
+		const [allPinnedTids, canSchedule] = await Promise.all([
+			db.getSortedSetRevRange(`cid:${data.cid}:tids:pinned`, data.start, data.stop),
+			privileges.categories.can('topics:schedule', data.cid, data.uid),
+		]);
+		const pinnedTids = canSchedule ? allPinnedTids : await filterScheduledTids(allPinnedTids);
+
+		return await topics.tools.checkPinExpiry(pinnedTids);
 	};
 
 	Categories.modifyTopicsByPrivilege = function (topics, privileges) {
-		if (!Array.isArray(topics) || !topics.length || privileges.isAdminOrMod) {
+		if (!Array.isArray(topics) || !topics.length || privileges.view_deleted) {
 			return;
 		}
 
-		topics.forEach(function (topic) {
-			if (topic.deleted && !topic.isOwner) {
+		topics.forEach((topic) => {
+			if (!topic.scheduled && topic.deleted && !topic.isOwner) {
 				topic.title = '[[topic:topic_is_deleted]]';
+				if (topic.hasOwnProperty('titleRaw')) {
+					topics.titleRaw = '[[topic:topic_is_deleted]]';
+				}
 				topic.slug = topic.tid;
 				topic.teaser = null;
 				topic.noAnchor = true;
@@ -209,40 +171,24 @@ module.exports = function (Categories) {
 		});
 	};
 
-	Categories.onNewPostMade = function (cid, pinned, postData, callback) {
+	Categories.onNewPostMade = async function (cid, pinned, postData) {
 		if (!cid || !postData) {
-			return setImmediate(callback);
+			return;
 		}
-
-		async.parallel([
-			function (next) {
-				db.sortedSetAdd('cid:' + cid + ':pids', postData.timestamp, postData.pid, next);
-			},
-			function (next) {
-				db.sortedSetAdd('cid:' + cid + ':tids:lastposttime', postData.timestamp, postData.tid, next);
-			},
-			function (next) {
-				db.incrObjectField('category:' + cid, 'post_count', next);
-			},
-			function (next) {
-				if (parseInt(pinned, 10) === 1) {
-					return setImmediate(next);
-				}
-
-				async.parallel([
-					function (next) {
-						db.sortedSetAdd('cid:' + cid + ':tids', postData.timestamp, postData.tid, next);
-					},
-					function (next) {
-						db.sortedSetIncrBy('cid:' + cid + ':tids:posts', 1, postData.tid, next);
-					},
-				], function (err) {
-					next(err);
-				});
-			},
-			function (next) {
-				Categories.updateRecentTid(cid, postData.tid, next);
-			},
-		], callback);
+		const promises = [
+			db.sortedSetAdd(`cid:${cid}:pids`, postData.timestamp, postData.pid),
+			db.incrObjectField(`category:${cid}`, 'post_count'),
+		];
+		if (!pinned) {
+			promises.push(db.sortedSetIncrBy(`cid:${cid}:tids:posts`, 1, postData.tid));
+		}
+		await Promise.all(promises);
+		await Categories.updateRecentTidForCid(cid);
 	};
+
+	async function filterScheduledTids(tids) {
+		const scores = await db.sortedSetScores('topics:scheduled', tids);
+		const now = Date.now();
+		return tids.filter((tid, index) => tid && (!scores[index] || scores[index] <= now));
+	}
 };

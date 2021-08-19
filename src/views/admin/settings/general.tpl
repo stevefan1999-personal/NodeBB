@@ -8,7 +8,8 @@
 		<form>
 			<label>[[admin/settings/general:title]]</label>
 			<input class="form-control" type="text" placeholder="[[admin/settings/general:title.name]]" data-field="title" />
-
+			<label for="title:short">[[admin/settings/general:title.short]]</label>
+			<input id="title:short" type="text" class="form-control" placeholder="[[admin/settings/general:title.short-placeholder]]" data-field="title:short" />
 			<label for="title:url">[[admin/settings/general:title.url]]</label>
 			<input id ="title:url" type="text" class="form-control" placeholder="[[admin/settings/general:title.url-placeholder]]" data-field="title:url" />
 			<p class="help-block">
@@ -101,10 +102,11 @@
 
 <div class="row">
 	<div class="col-sm-2 col-xs-12 settings-header">
-		[[admin/settings/general:touch-icon]]
+		[[admin/settings/general:pwa]]
 	</div>
 	<div class="col-sm-10 col-xs-12">
 		<div class="form-group">
+			<label for="touchIconUrl">[[admin/settings/general:touch-icon]]</label>
 			<div class="input-group">
 				<input id="touchIconUrl" type="text" class="form-control" data-field="brand:touchIcon" data-action="upload" data-target="touchIconUrl" data-route="{config.relative_path}/api/admin/uploadTouchIcon" readonly />
 				<span class="input-group-btn">
@@ -116,23 +118,61 @@
 				[[admin/settings/general:touch-icon.help]]
 			</p>
 		</div>
+
+		<div class="form-group">
+			<label for="touchIconUrl">[[admin/settings/general:maskable-icon]]</label>
+			<div class="input-group">
+				<input id="maskableIconUrl" type="text" class="form-control" data-field="brand:maskableIcon" data-action="upload" data-target="maskableIconUrl" data-route="{config.relative_path}/api/admin/uploadMaskableIcon" readonly />
+				<span class="input-group-btn">
+					<input data-action="upload" data-target="maskableIconUrl" data-route="{config.relative_path}/api/admin/uploadMaskableIcon" type="button" class="btn btn-default" value="[[admin/settings/general:touch-icon.upload]]"></input>
+					<button data-action="removeMaskableIcon" type="button" class="btn btn-default btn-danger"><i class="fa fa-times"></i></button>
+				</span>
+			</div>
+			<p class="help-block">
+				[[admin/settings/general:maskable-icon.help]]
+			</p>
+		</div>
 	</div>
 </div>
 
 <div class="row">
-	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/general:search-default-sort-by]]</div>
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/general:search]]</div>
 	<div class="col-sm-10 col-xs-12">
-		<select id="post-sort-by" class="form-control" data-field="searchDefaultSortBy">
-			<option value="relevance">[[search:relevance]]</option>
-			<option value="timestamp">[[search:post-time]]</option>
-			<option value="teaser.timestamp">[[search:last-reply-time]]</option>
-			<option value="topic.title">[[search:topic-title]]</option>
-			<option value="topic.postcount">[[search:number-of-replies]]</option>
-			<option value="topic.viewcount">[[search:number-of-views]]</option>
-			<option value="topic.timestamp">[[search:topic-start-date]]</option>
-			<option value="user.username">[[search:username]]</option>
-			<option value="category.name">[[search:category]]</option>
-		</select>
+		<div class="form-group">
+			<label>[[admin/settings/general:search-default-in]]</label>
+			<select class="form-control" data-field="searchDefaultIn">
+				<option value="titlesposts">[[search:titles-posts]]</option>
+				<option value="titles">[[search:titles]]</option>
+				<option value="posts">[[global:posts]]</option>
+				<option value="categories">[[global:header.categories]]</option>
+				<option value="users">[[global:users]]</option>
+				<option value="tags">[[tags:tags]]</option>
+			</select>
+		</div>
+		<div class="form-group">
+			<label>[[admin/settings/general:search-default-in-quick]]</label>
+			<select class="form-control" data-field="searchDefaultInQuick">
+				<option value="titlesposts">[[search:titles-posts]]</option>
+				<option value="titles">[[search:titles]]</option>
+				<option value="posts">[[global:posts]]</option>
+			</select>
+		</div>
+		<div class="form-group">
+			<label>[[admin/settings/general:search-default-sort-by]]</label>
+			<select id="post-sort-by" class="form-control" data-field="searchDefaultSortBy">
+				<option value="relevance">[[search:relevance]]</option>
+				<option value="timestamp">[[search:post-time]]</option>
+				<option value="votes">[[search:votes]]</option>
+				<option value="topic.lastposttime">[[search:last-reply-time]]</option>
+				<option value="topic.title">[[search:topic-title]]</option>
+				<option value="topic.postcount">[[search:number-of-replies]]</option>
+				<option value="topic.viewcount">[[search:number-of-views]]</option>
+				<option value="topic.votes">[[search:topic-votes]]</option>
+				<option value="topic.timestamp">[[search:topic-start-date]]</option>
+				<option value="user.username">[[search:username]]</option>
+				<option value="category.name">[[search:category]]</option>
+			</select>
+		</div>
 	</div>
 </div>
 
@@ -141,8 +181,8 @@
 	<div class="col-sm-10 col-xs-12">
 		<form>
 			<div class="checkbox">
-				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input type="checkbox" class="mdl-switch__input" id="showSiteTitle" data-field="useOutgoingLinksPage">
+				<label for="useOutgoingLinksPage" class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input type="checkbox" class="mdl-switch__input" id="useOutgoingLinksPage" data-field="useOutgoingLinksPage">
 					<span class="mdl-switch__label"><strong>[[admin/settings/general:outgoing-links.warning-page]]</strong></span>
 				</label>
 			</div>
@@ -155,4 +195,32 @@
 	</div>
 </div>
 
+<div class="row">
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/general:site-colors]]</div>
+	<div class="col-sm-10 col-xs-12">
+		<form>
+			<label>[[admin/settings/general:theme-color]]</label>
+			<input type="text" class="form-control" placeholder="#ffffff" data-field="themeColor" />
+
+			<label>[[admin/settings/general:background-color]]</label>
+			<input type="text" class="form-control" placeholder="#ffffff" data-field="backgroundColor" />
+			<p class="help-block">
+				[[admin/settings/general:background-color-help]]
+			</p>
+		</form>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/general:topic-tools]]</div>
+	<div class="col-sm-10 col-xs-12">
+		<form>
+			<label>[[admin/settings/general:undo-timeout]]</label>
+			<input type="text" class="form-control" placeholder="10000" data-field="undoTimeout" />
+			<p class="help-block">
+				[[admin/settings/general:undo-timeout-help]]
+			</p>
+		</form>
+	</div>
+</div>
 <!-- IMPORT admin/partials/settings/footer.tpl -->

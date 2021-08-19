@@ -1,68 +1,84 @@
 'use strict';
 
-var async = require('async');
-var plugins = require('../plugins');
-var db = require('../database');
-var translator = require('../translator');
-var pubsub = require('../pubsub');
+const validator = require('validator');
 
-var admin = module.exports;
-admin.cache = null;
+const plugins = require('../plugins');
+const db = require('../database');
+const pubsub = require('../pubsub');
 
-pubsub.on('admin:navigation:save', function () {
-	admin.cache = null;
+const admin = module.exports;
+let cache = null;
+
+pubsub.on('admin:navigation:save', () => {
+	cache = null;
 });
 
-admin.save = function (data, callback) {
-	var order = Object.keys(data);
-	var items = data.map(function (item) {
-		for (var i in item) {
-			if (item.hasOwnProperty(i) && typeof item[i] === 'string' && (i === 'title' || i === 'text')) {
-				item[i] = translator.escape(item[i]);
-			}
-		}
+admin.save = async function (data) {
+	const order = Object.keys(data);
+	const items = data.map((item, index) => {
+		item.order = order[index];
 		return JSON.stringify(item);
 	});
 
-	admin.cache = null;
+	cache = null;
 	pubsub.publish('admin:navigation:save');
-	async.waterfall([
-		function (next) {
-			db.delete('navigation:enabled', next);
-		},
-		function (next) {
-			db.sortedSetAdd('navigation:enabled', order, items, next);
-		},
-	], callback);
+	await db.delete('navigation:enabled');
+	await db.sortedSetAdd('navigation:enabled', order, items);
 };
 
-admin.getAdmin = function (callback) {
-	async.parallel({
-		enabled: admin.get,
-		available: getAvailable,
-	}, callback);
+admin.getAdmin = async function () {
+	const [enabled, available] = await Promise.all([
+		admin.get(),
+		getAvailable(),
+	]);
+	return { enabled: enabled, available: available };
 };
 
-admin.get = function (callback) {
-	async.waterfall([
-		function (next) {
-			db.getSortedSetRange('navigation:enabled', 0, -1, next);
-		},
-		function (data, next) {
-			data = data.map(function (item) {
-				return JSON.parse(item);
+const fieldsToEscape = ['iconClass', 'class', 'route', 'id', 'text', 'textClass', 'title'];
+
+admin.escapeFields = navItems => toggleEscape(navItems, true);
+admin.unescapeFields = navItems => toggleEscape(navItems, false);
+
+function toggleEscape(navItems, flag) {
+	navItems.forEach((item) => {
+		if (item) {
+			fieldsToEscape.forEach((field) => {
+				if (item.hasOwnProperty(field)) {
+					item[field] = validator[flag ? 'escape' : 'unescape'](String(item[field]));
+				}
 			});
+		}
+	});
+}
 
-			next(null, data);
-		},
-	], callback);
+admin.get = async function () {
+	if (cache) {
+		return cache.map(item => ({ ...item }));
+	}
+	const data = await db.getSortedSetRange('navigation:enabled', 0, -1);
+	cache = data.map((item) => {
+		item = JSON.parse(item);
+		item.groups = item.groups || [];
+		if (item.groups && !Array.isArray(item.groups)) {
+			item.groups = [item.groups];
+		}
+		return item;
+	});
+	admin.escapeFields(cache);
+
+	return cache.map(item => ({ ...item }));
 };
 
-function getAvailable(callback) {
-	var core = require('../../install/data/navigation.json').map(function (item) {
+async function getAvailable() {
+	const core = require('../../install/data/navigation.json').map((item) => {
 		item.core = true;
+		item.id = item.id || '';
+		item.properties = item.properties || { targetBlank: false };
+
 		return item;
 	});
 
-	plugins.fireHook('filter:navigation.available', core, callback);
+	return await plugins.hooks.fire('filter:navigation.available', core);
 }
+
+require('../promisify')(admin);

@@ -1,145 +1,120 @@
 'use strict';
 
-var ipaddr = require('ipaddr.js');
-var winston = require('winston');
-var async = require('async');
+const ipaddr = require('ipaddr.js');
+const winston = require('winston');
+const _ = require('lodash');
+const validator = require('validator');
 
-var db = require('../database');
-var pubsub = require('../pubsub');
-var plugins = require('../plugins');
-var analytics = require('../analytics');
+const db = require('../database');
+const pubsub = require('../pubsub');
+const plugins = require('../plugins');
+const analytics = require('../analytics');
 
-var Blacklist = module.exports;
-Blacklist._rules = [];
+const Blacklist = module.exports;
+Blacklist._rules = {};
 
-Blacklist.load = function (callback) {
-	callback = callback || function () {};
+Blacklist.load = async function () {
+	let rules = await Blacklist.get();
+	rules = Blacklist.validate(rules);
 
-	async.waterfall([
-		Blacklist.get,
-		Blacklist.validate,
-		function (rules, next) {
-			winston.verbose('[meta/blacklist] Loading ' + rules.valid.length + ' blacklist rule(s)' + (rules.duplicateCount > 0 ? ', ignored ' + rules.duplicateCount + ' duplicate(s)' : ''));
-			if (rules.invalid.length) {
-				winston.warn('[meta/blacklist] ' + rules.invalid.length + ' invalid blacklist rule(s) were ignored.');
-			}
+	winston.verbose(`[meta/blacklist] Loading ${rules.valid.length} blacklist rule(s)${rules.duplicateCount > 0 ? `, ignored ${rules.duplicateCount} duplicate(s)` : ''}`);
+	if (rules.invalid.length) {
+		winston.warn(`[meta/blacklist] ${rules.invalid.length} invalid blacklist rule(s) were ignored.`);
+	}
 
-			Blacklist._rules = {
-				ipv4: rules.ipv4,
-				ipv6: rules.ipv6,
-				cidr: rules.cidr,
-				cidr6: rules.cidr6,
-			};
-			next();
-		},
-	], callback);
+	Blacklist._rules = {
+		ipv4: rules.ipv4,
+		ipv6: rules.ipv6,
+		cidr: rules.cidr,
+		cidr6: rules.cidr6,
+	};
 };
 
 pubsub.on('blacklist:reload', Blacklist.load);
 
-Blacklist.save = function (rules, callback) {
-	async.waterfall([
-		function (next) {
-			db.setObject('ip-blacklist-rules', { rules: rules }, next);
-		},
-		function (next) {
-			Blacklist.load(next);
-			pubsub.publish('blacklist:reload');
-		},
-	], callback);
+Blacklist.save = async function (rules) {
+	await db.setObject('ip-blacklist-rules', { rules: rules });
+	await Blacklist.load();
+	pubsub.publish('blacklist:reload');
 };
 
-Blacklist.get = function (callback) {
-	async.waterfall([
-		function (next) {
-			db.getObject('ip-blacklist-rules', next);
-		},
-		function (data, next) {
-			next(null, data && data.rules);
-		},
-	], callback);
+Blacklist.get = async function () {
+	const data = await db.getObject('ip-blacklist-rules');
+	return data && data.rules;
 };
 
-Blacklist.test = function (clientIp, callback) {
+Blacklist.test = async function (clientIp) {
 	// Some handy test addresses
 	// clientIp = '2001:db8:85a3:0:0:8a2e:370:7334';	// IPv6
 	// clientIp = '127.0.15.1';	// IPv4
 	// clientIp = '127.0.15.1:3443'; // IPv4 with port strip port to not fail
 	if (!clientIp) {
-		return setImmediate(callback);
+		return;
 	}
 	clientIp = clientIp.split(':').length === 2 ? clientIp.split(':')[0] : clientIp;
 
-	var addr;
+	let addr;
 	try {
 		addr = ipaddr.parse(clientIp);
 	} catch (err) {
-		winston.error('[meta/blacklist] Error parsing client IP : ' + clientIp);
-		return callback(err);
+		winston.error(`[meta/blacklist] Error parsing client IP : ${clientIp}`);
+		throw err;
 	}
 
 	if (
-		Blacklist._rules.ipv4.indexOf(clientIp) === -1 &&	// not explicitly specified in ipv4 list
-		Blacklist._rules.ipv6.indexOf(clientIp) === -1 &&	// not explicitly specified in ipv6 list
-		!Blacklist._rules.cidr.some(function (subnet) {
-			var cidr = ipaddr.parseCIDR(subnet);
+		!Blacklist._rules.ipv4.includes(clientIp) &&	// not explicitly specified in ipv4 list
+		!Blacklist._rules.ipv6.includes(clientIp) &&	// not explicitly specified in ipv6 list
+		!Blacklist._rules.cidr.some((subnet) => {
+			const cidr = ipaddr.parseCIDR(subnet);
 			if (addr.kind() !== cidr[0].kind()) {
 				return false;
 			}
 			return addr.match(cidr);
 		})	// not in a blacklisted IPv4 or IPv6 cidr range
 	) {
-		plugins.fireHook('filter:blacklist.test', {	// To return test failure, pass back an error in callback
-			ip: clientIp,
-		}, function (err) {
-			if (err) {
-				analytics.increment('blacklist');
-			}
-
-			callback(err);
-		});
+		try {
+			// To return test failure, pass back an error in callback
+			await plugins.hooks.fire('filter:blacklist.test', { ip: clientIp });
+		} catch (err) {
+			analytics.increment('blacklist');
+			throw err;
+		}
 	} else {
-		var err = new Error('[[error:blacklisted-ip]]');
+		const err = new Error('[[error:blacklisted-ip]]');
 		err.code = 'blacklisted-ip';
 
 		analytics.increment('blacklist');
-
-		setImmediate(callback, err);
+		throw err;
 	}
 };
 
-Blacklist.validate = function (rules, callback) {
+Blacklist.validate = function (rules) {
 	rules = (rules || '').split('\n');
-	var ipv4 = [];
-	var ipv6 = [];
-	var cidr = [];
-	var invalid = [];
-	var duplicateCount = 0;
+	const ipv4 = [];
+	const ipv6 = [];
+	const cidr = [];
+	const invalid = [];
+	let duplicateCount = 0;
 
-	var inlineCommentMatch = /#.*$/;
-	var whitelist = ['127.0.0.1', '::1', '::ffff:0:127.0.0.1'];
+	const inlineCommentMatch = /#.*$/;
+	const whitelist = ['127.0.0.1', '::1', '::ffff:0:127.0.0.1'];
 
 	// Filter out blank lines and lines starting with the hash character (comments)
 	// Also trim inputs and remove inline comments
-	rules = rules.map(function (rule) {
+	rules = rules.map((rule) => {
 		rule = rule.replace(inlineCommentMatch, '').trim();
 		return rule.length && !rule.startsWith('#') ? rule : null;
 	}).filter(Boolean);
 
 	// Filter out duplicates
-	rules = rules.filter(function (rule, index) {
-		const pass = rules.indexOf(rule) === index;
-		if (!pass) {
-			duplicateCount += 1;
-		}
-
-		return pass;
-	});
+	const uniqRules = _.uniq(rules);
+	duplicateCount += rules.length - uniqRules.length;
+	rules = uniqRules;
 
 	// Filter out invalid rules
-	rules = rules.filter(function (rule) {
-		var addr;
-		var isRange = false;
+	rules = rules.filter((rule) => {
+		let addr;
+		let isRange = false;
 		try {
 			addr = ipaddr.parse(rule);
 		} catch (e) {
@@ -153,8 +128,8 @@ Blacklist.validate = function (rules, callback) {
 			// Do nothing
 		}
 
-		if (!addr || whitelist.indexOf(rule) !== -1) {
-			invalid.push(rule);
+		if (!addr || whitelist.includes(rule)) {
+			invalid.push(validator.escape(rule));
 			return false;
 		}
 
@@ -174,7 +149,7 @@ Blacklist.validate = function (rules, callback) {
 		return false;
 	});
 
-	callback(null, {
+	return {
 		numRules: rules.length + invalid.length,
 		ipv4: ipv4,
 		ipv6: ipv6,
@@ -182,25 +157,15 @@ Blacklist.validate = function (rules, callback) {
 		valid: rules,
 		invalid: invalid,
 		duplicateCount: duplicateCount,
-	});
+	};
 };
 
-Blacklist.addRule = function (rule, callback) {
-	var valid;
-	async.waterfall([
-		function (next) {
-			Blacklist.validate(rule, next);
-		},
-		function (result, next) {
-			valid = result.valid;
-			if (!valid.length) {
-				return next(new Error('[[error:invalid-rule]]'));
-			}
-			Blacklist.get(next);
-		},
-		function (rules, next) {
-			rules = rules + '\n' + valid[0];
-			Blacklist.save(rules, next);
-		},
-	], callback);
+Blacklist.addRule = async function (rule) {
+	const { valid } = Blacklist.validate(rule);
+	if (!valid.length) {
+		throw new Error('[[error:invalid-rule]]');
+	}
+	let rules = await Blacklist.get();
+	rules = `${rules}\n${valid[0]}`;
+	await Blacklist.save(rules);
 };

@@ -1,70 +1,75 @@
 
 'use strict';
 
-var async = require('async');
-var winston = require('winston');
-var validator = require('validator');
+const fs = require('fs');
+const path = require('path');
+const winston = require('winston');
+const validator = require('validator');
 
-var db = require('../database');
-var plugins = require('../plugins');
+const { baseDir } = require('../constants').paths;
+const db = require('../database');
+const plugins = require('../plugins');
+const batch = require('../batch');
 
 module.exports = function (User) {
-	User.logIP = function (uid, ip, callback) {
-		var now = Date.now();
-		async.waterfall([
-			function (next) {
-				db.sortedSetAdd('uid:' + uid + ':ip', now, ip || 'Unknown', next);
-			},
-			function (next) {
-				if (ip) {
-					db.sortedSetAdd('ip:' + ip + ':uid', now, uid, next);
-				} else {
-					next();
-				}
-			},
-		], callback);
+	User.logIP = async function (uid, ip) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return;
+		}
+		const now = Date.now();
+		const bulk = [
+			[`uid:${uid}:ip`, now, ip || 'Unknown'],
+		];
+		if (ip) {
+			bulk.push([`ip:${ip}:uid`, now, uid]);
+		}
+		await db.sortedSetAddBulk(bulk);
 	};
 
-	User.getIPs = function (uid, stop, callback) {
-		async.waterfall([
-			function (next) {
-				db.getSortedSetRevRange('uid:' + uid + ':ip', 0, stop, next);
-			},
-			function (ips, next) {
-				ips = ips.map(function (ip) {
-					return validator.escape(String(ip));
-				});
-				next(null, ips);
-			},
-		], callback);
+	User.getIPs = async function (uid, stop) {
+		const ips = await db.getSortedSetRevRange(`uid:${uid}:ip`, 0, stop);
+		return ips.map(ip => validator.escape(String(ip)));
 	};
 
-	User.getUsersCSV = function (callback) {
+	User.getUsersCSV = async function () {
 		winston.verbose('[user/getUsersCSV] Compiling User CSV data');
-		var csvContent = '';
-		var uids;
-		async.waterfall([
-			function (next) {
-				db.getSortedSetRangeWithScores('username:uid', 0, -1, next);
-			},
-			function (users, next) {
-				uids = users.map(function (user) {
-					return user.score;
-				});
-				plugins.fireHook('filter:user.csvFields', { fields: ['uid', 'email', 'username'] }, next);
-			},
-			function (data, next) {
-				User.getUsersFields(uids, data.fields, next);
-			},
-			function (usersData, next) {
-				usersData.forEach(function (user) {
-					if (user) {
-						csvContent += user.email + ',' + user.username + ',' + user.uid + '\n';
-					}
-				});
 
-				next(null, csvContent);
-			},
-		], callback);
+		const data = await plugins.hooks.fire('filter:user.csvFields', { fields: ['uid', 'email', 'username'] });
+		let csvContent = `${data.fields.join(',')}\n`;
+		await batch.processSortedSet('users:joindate', async (uids) => {
+			const usersData = await User.getUsersFields(uids, data.fields);
+			csvContent += usersData.reduce((memo, user) => {
+				memo += `${data.fields.map(field => user[field]).join(',')}\n`;
+				return memo;
+			}, '');
+		}, {});
+
+		return csvContent;
+	};
+
+	User.exportUsersCSV = async function () {
+		winston.verbose('[user/exportUsersCSV] Exporting User CSV data');
+
+		const data = await plugins.hooks.fire('filter:user.csvFields', { fields: ['email', 'username', 'uid'] });
+		const fd = await fs.promises.open(
+			path.join(baseDir, 'build/export', 'users.csv'),
+			'w'
+		);
+		fs.promises.appendFile(fd, `${data.fields.join(',')},ip\n`);
+		await batch.processSortedSet('users:joindate', async (uids) => {
+			const usersData = await User.getUsersFields(uids, data.fields.slice());
+			const ips = await Promise.all(uids.map(uid => db.getSortedSetRevRange(`uid:${uid}:ip`, 0, -1)));
+			let line = '';
+			usersData.forEach((user, index) => {
+				const userIPs = ips[index] ? ips[index].join(',') : '';
+				line += `${data.fields.map(field => user[field]).join(',')},"${userIPs}"\n`;
+			});
+
+			await fs.promises.appendFile(fd, line);
+		}, {
+			batch: 5000,
+			interval: 250,
+		});
+		await fd.close();
 	};
 };

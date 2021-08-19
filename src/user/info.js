@@ -1,188 +1,141 @@
 'use strict';
 
-var async = require('async');
-var _ = require('lodash');
-var validator = require('validator');
+const _ = require('lodash');
+const validator = require('validator');
 
-var db = require('../database');
-var posts = require('../posts');
-var topics = require('../topics');
-var utils = require('../../public/src/utils');
+const db = require('../database');
+const posts = require('../posts');
+const topics = require('../topics');
+const utils = require('../../public/src/utils');
 
 module.exports = function (User) {
-	User.getLatestBanInfo = function (uid, callback) {
+	User.getLatestBanInfo = async function (uid) {
 		// Simply retrieves the last record of the user's ban, even if they've been unbanned since then.
-		var timestamp;
-		var expiry;
-		var reason;
-
-		async.waterfall([
-			async.apply(db.getSortedSetRevRangeWithScores, 'uid:' + uid + ':bans', 0, 0),
-			function (record, next) {
-				if (!record.length) {
-					return next(new Error('no-ban-info'));
-				}
-
-				timestamp = record[0].score;
-				expiry = record[0].value;
-
-				db.getSortedSetRangeByScore('banned:' + uid + ':reasons', 0, -1, timestamp, timestamp, next);
-			},
-			function (_reason, next) {
-				reason = _reason && _reason.length ? _reason[0] : '';
-				next(null, {
-					uid: uid,
-					timestamp: timestamp,
-					expiry: parseInt(expiry, 10),
-					expiry_readable: new Date(parseInt(expiry, 10)).toString(),
-					reason: validator.escape(String(reason)),
-				});
-			},
-		], callback);
+		const record = await db.getSortedSetRevRange(`uid:${uid}:bans:timestamp`, 0, 0);
+		if (!record.length) {
+			throw new Error('no-ban-info');
+		}
+		const banInfo = await db.getObject(record[0]);
+		const expire = parseInt(banInfo.expire, 10);
+		const expire_readable = utils.toISOString(expire);
+		return {
+			uid: uid,
+			timestamp: banInfo.timestamp,
+			banned_until: expire,
+			expiry: expire, /* backward compatible alias */
+			banned_until_readable: expire_readable,
+			expiry_readable: expire_readable, /* backward compatible alias */
+			reason: validator.escape(String(banInfo.reason || '')),
+		};
 	};
 
-	User.getModerationHistory = function (uid, callback) {
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					flags: async.apply(db.getSortedSetRevRangeWithScores, 'flags:byTargetUid:' + uid, 0, 19),
-					bans: async.apply(db.getSortedSetRevRangeWithScores, 'uid:' + uid + ':bans', 0, 19),
-					reasons: async.apply(db.getSortedSetRevRangeWithScores, 'banned:' + uid + ':reasons', 0, 19),
-				}, next);
-			},
-			function (data, next) {
-				// Get pids from flag objects
-				var keys = data.flags.map(function (flagObj) {
-					return 'flag:' + flagObj.value;
+	User.getModerationHistory = async function (uid) {
+		let [flags, bans] = await Promise.all([
+			db.getSortedSetRevRangeWithScores(`flags:byTargetUid:${uid}`, 0, 19),
+			db.getSortedSetRevRange(`uid:${uid}:bans:timestamp`, 0, 19),
+		]);
+
+		// Get pids from flag objects
+		const keys = flags.map(flagObj => `flag:${flagObj.value}`);
+		const payload = await db.getObjectsFields(keys, ['type', 'targetId']);
+
+		// Only pass on flag ids from posts
+		flags = payload.reduce((memo, cur, idx) => {
+			if (cur.type === 'post') {
+				memo.push({
+					value: parseInt(cur.targetId, 10),
+					score: flags[idx].score,
 				});
-				db.getObjectsFields(keys, ['type', 'targetId'], function (err, payload) {
-					if (err) {
-						return next(err);
-					}
+			}
 
-					// Only pass on flag ids from posts
-					data.flags = payload.reduce(function (memo, cur, idx) {
-						if (cur.type === 'post') {
-							memo.push({
-								value: parseInt(cur.targetId, 10),
-								score: data.flags[idx].score,
-							});
-						}
+			return memo;
+		}, []);
 
-						return memo;
-					}, []);
+		[flags, bans] = await Promise.all([
+			getFlagMetadata(flags),
+			formatBanData(bans),
+		]);
 
-					getFlagMetadata(data, next);
-				});
-			},
-			function (data, next) {
-				formatBanData(data);
-				next(null, data);
-			},
-		], callback);
+		return {
+			flags: flags,
+			bans: bans,
+		};
 	};
 
-	User.getHistory = function (set, callback) {
-		async.waterfall([
-			function (next) {
-				db.getSortedSetRevRangeWithScores(set, 0, -1, next);
-			},
-			function (data, next) {
-				next(null, data.map(function (set) {
-					set.timestamp = set.score;
-					set.timestampISO = utils.toISOString(set.score);
-					set.value = validator.escape(String(set.value.split(':')[0]));
-					delete set.score;
-					return set;
-				}));
-			},
-		], callback);
-	};
-
-	function getFlagMetadata(data, callback) {
-		var pids = data.flags.map(function (flagObj) {
-			return parseInt(flagObj.value, 10);
+	User.getHistory = async function (set) {
+		const data = await db.getSortedSetRevRangeWithScores(set, 0, -1);
+		return data.map((set) => {
+			set.timestamp = set.score;
+			set.timestampISO = utils.toISOString(set.score);
+			set.value = validator.escape(String(set.value.split(':')[0]));
+			delete set.score;
+			return set;
 		});
-		async.waterfall([
-			function (next) {
-				posts.getPostsFields(pids, ['tid'], next);
-			},
-			function (postData, next) {
-				var tids = postData.map(function (post) {
-					return post.tid;
-				});
+	};
 
-				topics.getTopicsFields(tids, ['title'], next);
-			},
-			function (topicData, next) {
-				data.flags = data.flags.map(function (flagObj, idx) {
-					flagObj.pid = flagObj.value;
-					flagObj.timestamp = flagObj.score;
-					flagObj.timestampISO = new Date(flagObj.score).toISOString();
-					flagObj.timestampReadable = new Date(flagObj.score).toString();
+	async function getFlagMetadata(flags) {
+		const pids = flags.map(flagObj => parseInt(flagObj.value, 10));
+		const postData = await posts.getPostsFields(pids, ['tid']);
+		const tids = postData.map(post => post.tid);
 
-					delete flagObj.value;
-					delete flagObj.score;
+		const topicData = await topics.getTopicsFields(tids, ['title']);
+		flags = flags.map((flagObj, idx) => {
+			flagObj.pid = flagObj.value;
+			flagObj.timestamp = flagObj.score;
+			flagObj.timestampISO = new Date(flagObj.score).toISOString();
+			flagObj.timestampReadable = new Date(flagObj.score).toString();
 
-					return _.extend(flagObj, topicData[idx]);
-				});
-				next(null, data);
-			},
-		], callback);
+			delete flagObj.value;
+			delete flagObj.score;
+			if (!tids[idx]) {
+				flagObj.targetPurged = true;
+			}
+			return _.extend(flagObj, topicData[idx]);
+		});
+		return flags;
 	}
 
-	function formatBanData(data) {
-		var reasons = data.reasons.reduce(function (memo, cur) {
-			memo[cur.score] = cur.value;
-			return memo;
-		}, {});
-
-		data.bans = data.bans.map(function (banObj) {
-			banObj.until = parseInt(banObj.value, 10);
+	async function formatBanData(bans) {
+		const banData = await db.getObjects(bans);
+		const uids = banData.map(banData => banData.fromUid);
+		const usersData = await User.getUsersFields(uids, ['uid', 'username', 'userslug', 'picture']);
+		return banData.map((banObj, index) => {
+			banObj.user = usersData[index];
+			banObj.until = parseInt(banObj.expire, 10);
 			banObj.untilReadable = new Date(banObj.until).toString();
-			banObj.timestamp = parseInt(banObj.score, 10);
-			banObj.timestampReadable = new Date(banObj.score).toString();
-			banObj.timestampISO = new Date(banObj.score).toISOString();
-			banObj.reason = validator.escape(String(reasons[banObj.score] || '')) || '[[user:info.banned-no-reason]]';
-
-			delete banObj.value;
-			delete banObj.score;
-			delete data.reasons;
-
+			banObj.timestampReadable = new Date(parseInt(banObj.timestamp, 10)).toString();
+			banObj.timestampISO = utils.toISOString(banObj.timestamp);
+			banObj.reason = validator.escape(String(banObj.reason || '')) || '[[user:info.banned-no-reason]]';
 			return banObj;
 		});
 	}
 
-	User.getModerationNotes = function (uid, start, stop, callback) {
-		var noteData;
-		async.waterfall([
-			function (next) {
-				db.getSortedSetRevRange('uid:' + uid + ':moderation:notes', start, stop, next);
-			},
-			function (notes, next) {
-				var uids = [];
-				noteData = notes.map(function (note) {
-					try {
-						var data = JSON.parse(note);
-						uids.push(data.uid);
-						data.timestampISO = utils.toISOString(data.timestamp);
-						data.note = validator.escape(String(data.note));
-						return data;
-					} catch (err) {
-						return next(err);
-					}
-				});
+	User.getModerationNotes = async function (uid, start, stop) {
+		const noteIds = await db.getSortedSetRevRange(`uid:${uid}:moderation:notes`, start, stop);
+		const keys = noteIds.map(id => `uid:${uid}:moderation:note:${id}`);
+		const notes = await db.getObjects(keys);
+		const uids = [];
 
-				User.getUsersFields(uids, ['uid', 'username', 'userslug', 'picture'], next);
-			},
-			function (userData, next) {
-				noteData.forEach(function (note, index) {
-					if (note) {
-						note.user = userData[index];
-					}
-				});
-				next(null, noteData);
-			},
-		], callback);
+		const noteData = notes.map((note) => {
+			if (note) {
+				uids.push(note.uid);
+				note.timestampISO = utils.toISOString(note.timestamp);
+				note.note = validator.escape(String(note.note));
+			}
+			return note;
+		});
+
+		const userData = await User.getUsersFields(uids, ['uid', 'username', 'userslug', 'picture']);
+		noteData.forEach((note, index) => {
+			if (note) {
+				note.user = userData[index];
+			}
+		});
+		return noteData;
+	};
+
+	User.appendModerationNote = async ({ uid, noteData }) => {
+		await db.sortedSetAdd(`uid:${uid}:moderation:notes`, noteData.timestamp, noteData.timestamp);
+		await db.setObject(`uid:${uid}:moderation:note:${noteData.timestamp}`, noteData);
 	};
 };

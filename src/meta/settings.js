@@ -1,73 +1,119 @@
 'use strict';
 
-var async = require('async');
+const db = require('../database');
+const plugins = require('../plugins');
+const Meta = require('./index');
+const pubsub = require('../pubsub');
+const cache = require('../cache');
 
-var db = require('../database');
-var plugins = require('../plugins');
-var Meta = require('../meta');
-var pubsub = require('../pubsub');
+const Settings = module.exports;
 
-var Settings = module.exports;
+Settings.get = async function (hash) {
+	const cached = cache.get(`settings:${hash}`);
+	if (cached) {
+		return cached;
+	}
+	let data = await db.getObject(`settings:${hash}`) || {};
+	const sortedLists = await db.getSetMembers(`settings:${hash}:sorted-lists`);
 
-Settings.get = function (hash, callback) {
-	db.getObject('settings:' + hash, function (err, settings) {
-		callback(err, settings || {});
-	});
+	await Promise.all(sortedLists.map(async (list) => {
+		const members = await db.getSortedSetRange(`settings:${hash}:sorted-list:${list}`, 0, -1) || [];
+		const keys = [];
+
+		data[list] = [];
+		for (const order of members) {
+			keys.push(`settings:${hash}:sorted-list:${list}:${order}`);
+		}
+
+		const objects = await db.getObjects(keys);
+		objects.forEach((obj) => {
+			data[list].push(obj);
+		});
+	}));
+
+	({ values: data } = await plugins.hooks.fire('filter:settings.get', { plugin: hash, values: data }));
+	cache.set(`settings:${hash}`, data);
+	return data;
 };
 
-Settings.getOne = function (hash, field, callback) {
-	db.getObjectField('settings:' + hash, field, callback);
+Settings.getOne = async function (hash, field) {
+	const data = await Settings.get(hash);
+	return data[field] !== undefined ? data[field] : null;
 };
 
-Settings.set = function (hash, values, quiet, callback) {
-	if (!callback && typeof quiet === 'function') {
-		callback = quiet;
-		quiet = false;
-	} else {
-		quiet = quiet || false;
+Settings.set = async function (hash, values, quiet) {
+	quiet = quiet || false;
+
+	({ plugin: hash, settings: values, quiet } = await plugins.hooks.fire('filter:settings.set', { plugin: hash, settings: values, quiet }));
+
+	const sortedListData = {};
+	for (const [key, value] of Object.entries(values)) {
+		if (Array.isArray(value) && typeof value[0] !== 'string') {
+			sortedListData[key] = value;
+			delete values[key];
+		}
+	}
+	const sortedLists = Object.keys(sortedListData);
+
+	if (sortedLists.length) {
+		// Remove provided (but empty) sorted lists from the hash set
+		await db.setRemove(`settings:${hash}:sorted-lists`, sortedLists.filter(list => !sortedListData[list].length));
+		await db.setAdd(`settings:${hash}:sorted-lists`, sortedLists);
+
+		await Promise.all(sortedLists.map(async (list) => {
+			const numItems = await db.sortedSetCard(`settings:${hash}:sorted-list:${list}`);
+			const deleteKeys = [`settings:${hash}:sorted-list:${list}`];
+			for (let x = 0; x < numItems; x++) {
+				deleteKeys.push(`settings:${hash}:sorted-list:${list}:${x}`);
+			}
+			await db.deleteAll(deleteKeys);
+		}));
+
+		const ops = [];
+		sortedLists.forEach((list) => {
+			const arr = sortedListData[list];
+			arr.forEach((data, order) => {
+				ops.push(db.sortedSetAdd(`settings:${hash}:sorted-list:${list}`, order, order));
+				ops.push(db.setObject(`settings:${hash}:sorted-list:${list}:${order}`, data));
+			});
+		});
+
+		await Promise.all(ops);
 	}
 
-	async.waterfall([
-		function (next) {
-			db.setObject('settings:' + hash, values, next);
-		},
-		function (next) {
-			plugins.fireHook('action:settings.set', {
-				plugin: hash,
-				settings: values,
-			});
-			pubsub.publish('action:settings.set.' + hash, values);
-			Meta.reloadRequired = !quiet;
-			next();
-		},
-	], callback);
+	if (Object.keys(values).length) {
+		await db.setObject(`settings:${hash}`, values);
+	}
+
+	cache.del(`settings:${hash}`);
+
+	plugins.hooks.fire('action:settings.set', {
+		plugin: hash,
+		settings: { ...values, ...sortedListData },	// Add back sorted list data to values hash
+	});
+
+	pubsub.publish(`action:settings.set.${hash}`, values);
+	Meta.reloadRequired = !quiet;
 };
 
-Settings.setOne = function (hash, field, value, callback) {
-	var data = {};
+Settings.setOne = async function (hash, field, value) {
+	const data = {};
 	data[field] = value;
-	Settings.set(hash, data, callback);
+	await Settings.set(hash, data);
 };
 
-Settings.setOnEmpty = function (hash, values, callback) {
-	async.waterfall([
-		function (next) {
-			db.getObject('settings:' + hash, next);
-		},
-		function (settings, next) {
-			settings = settings || {};
-			var empty = {};
-			Object.keys(values).forEach(function (key) {
-				if (!settings.hasOwnProperty(key)) {
-					empty[key] = values[key];
-				}
-			});
+Settings.setOnEmpty = async function (hash, values) {
+	const settings = await Settings.get(hash) || {};
+	const empty = {};
 
-			if (Object.keys(empty).length) {
-				Settings.set(hash, empty, next);
-			} else {
-				next();
-			}
-		},
-	], callback);
+	Object.keys(values).forEach((key) => {
+		if (!settings.hasOwnProperty(key)) {
+			empty[key] = values[key];
+		}
+	});
+
+
+	if (Object.keys(empty).length) {
+		await Settings.set(hash, empty);
+	}
 };

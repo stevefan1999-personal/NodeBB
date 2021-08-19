@@ -1,74 +1,44 @@
 'use strict';
 
-var async = require('async');
-
-var privileges = require('../privileges');
-var cache = require('./cache');
+const privileges = require('../privileges');
 
 module.exports = function (Posts) {
 	Posts.tools = {};
 
-	Posts.tools.delete = function (uid, pid, callback) {
-		togglePostDelete(uid, pid, true, callback);
+	Posts.tools.delete = async function (uid, pid) {
+		return await togglePostDelete(uid, pid, true);
 	};
 
-	Posts.tools.restore = function (uid, pid, callback) {
-		togglePostDelete(uid, pid, false, callback);
+	Posts.tools.restore = async function (uid, pid) {
+		return await togglePostDelete(uid, pid, false);
 	};
 
-	function togglePostDelete(uid, pid, isDelete, callback) {
-		async.waterfall([
-			function (next) {
-				Posts.exists(pid, next);
-			},
-			function (exists, next) {
-				if (!exists) {
-					return next(new Error('[[error:no-post]]'));
-				}
-				Posts.getPostField(pid, 'deleted', next);
-			},
-			function (deleted, next) {
-				if (parseInt(deleted, 10) === 1 && isDelete) {
-					return next(new Error('[[error:post-already-deleted]]'));
-				} else if (parseInt(deleted, 10) !== 1 && !isDelete) {
-					return next(new Error('[[error:post-already-restored]]'));
-				}
+	async function togglePostDelete(uid, pid, isDelete) {
+		const [postData, canDelete] = await Promise.all([
+			Posts.getPostData(pid),
+			privileges.posts.canDelete(pid, uid),
+		]);
+		if (!postData) {
+			throw new Error('[[error:no-post]]');
+		}
 
-				privileges.posts.canDelete(pid, uid, next);
-			},
-			function (canDelete, next) {
-				if (!canDelete.flag) {
-					return next(new Error(canDelete.message));
-				}
+		if (postData.deleted && isDelete) {
+			throw new Error('[[error:post-already-deleted]]');
+		} else if (!postData.deleted && !isDelete) {
+			throw new Error('[[error:post-already-restored]]');
+		}
 
-				if (isDelete) {
-					cache.del(pid);
-					Posts.delete(pid, uid, next);
-				} else {
-					Posts.restore(pid, uid, function (err, postData) {
-						if (err) {
-							return next(err);
-						}
-						Posts.parsePost(postData, next);
-					});
-				}
-			},
-		], callback);
+		if (!canDelete.flag) {
+			throw new Error(canDelete.message);
+		}
+		let post;
+		if (isDelete) {
+			require('./cache').del(pid);
+			post = await Posts.delete(pid, uid);
+		} else {
+			post = await Posts.restore(pid, uid);
+			post = await Posts.parsePost(post);
+		}
+		return post;
 	}
-
-	Posts.tools.purge = function (uid, pid, callback) {
-		async.waterfall([
-			function (next) {
-				privileges.posts.canPurge(pid, uid, next);
-			},
-			function (canPurge, next) {
-				if (!canPurge) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-				cache.del(pid);
-				Posts.purge(pid, uid, next);
-			},
-		], callback);
-	};
 };
-

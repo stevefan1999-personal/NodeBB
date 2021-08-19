@@ -1,187 +1,192 @@
 'use strict';
 
-var async = require('async');
+const user = require('../user');
+const posts = require('../posts');
+const flags = require('../flags');
+const analytics = require('../analytics');
+const plugins = require('../plugins');
+const pagination = require('../pagination');
+const privileges = require('../privileges');
+const utils = require('../utils');
+const helpers = require('./helpers');
 
-var user = require('../user');
-var categories = require('../categories');
-var flags = require('../flags');
-var analytics = require('../analytics');
-var plugins = require('../plugins');
-var pagination = require('../pagination');
-
-var adminPostQueueController = require('./admin/postqueue');
-var modsController = module.exports;
+const modsController = module.exports;
 modsController.flags = {};
 
-modsController.flags.list = function (req, res, next) {
-	var filters;
-	var hasFilter;
-	var validFilters = ['assignee', 'state', 'reporterId', 'type', 'targetUid', 'cid', 'quick', 'page', 'perPage'];
+modsController.flags.list = async function (req, res) {
+	const validFilters = ['assignee', 'state', 'reporterId', 'type', 'targetUid', 'cid', 'quick', 'page', 'perPage'];
+	const validSorts = ['newest', 'oldest', 'reports', 'upvotes', 'downvotes', 'replies'];
 
-	// Reset filters if explicitly requested
-	if (parseInt(req.query.reset, 10) === 1) {
-		delete req.session.flags_filters;
+	const results = await Promise.all([
+		user.isAdminOrGlobalMod(req.uid),
+		user.getModeratedCids(req.uid),
+		plugins.hooks.fire('filter:flags.validateFilters', { filters: validFilters }),
+		plugins.hooks.fire('filter:flags.validateSort', { sorts: validSorts }),
+	]);
+	const [isAdminOrGlobalMod, moderatedCids,, { sorts }] = results;
+	let [,, { filters }] = results;
+
+	if (!(isAdminOrGlobalMod || !!moderatedCids.length)) {
+		return helpers.notAllowed(req, res);
 	}
 
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				isAdminOrGlobalMod: async.apply(user.isAdminOrGlobalMod, req.uid),
-				moderatedCids: async.apply(user.getModeratedCids, req.uid),
-				validFilters: async.apply(plugins.fireHook, 'filter:flags.validateFilters', { filters: validFilters }),
-			}, next);
-		},
-		function (results, next) {
-			if (!(results.isAdminOrGlobalMod || !!results.moderatedCids.length)) {
-				return next(new Error('[[error:no-privileges]]'));
-			}
-
-			if (!results.isAdminOrGlobalMod && results.moderatedCids.length) {
-				res.locals.cids = results.moderatedCids;
-			}
-
-			validFilters = results.validFilters.filters;
-
-			// Parse query string params for filters
-			hasFilter = false;
-
-			filters = validFilters.reduce(function (memo, cur) {
-				if (req.query.hasOwnProperty(cur)) {
-					memo[cur] = req.query[cur];
-				}
-
-				return memo;
-			}, {});
-			hasFilter = !!Object.keys(filters).length;
-
-			if (!hasFilter && req.session.hasOwnProperty('flags_filters')) {
-				// Load filters from session object
-				filters = req.session.flags_filters;
-				hasFilter = true;
-			}
-
-			if (res.locals.cids) {
-				if (!filters.cid) {
-					// If mod and no cid filter, add filter for their modded categories
-					filters.cid = res.locals.cids;
-				} else if (Array.isArray(filters.cid)) {
-					// Remove cids they do not moderate
-					filters.cid = filters.cid.filter(function (cid) {
-						return res.locals.cids.indexOf(String(cid)) !== -1;
-					});
-				} else if (res.locals.cids.indexOf(String(filters.cid)) === -1) {
-					filters.cid = res.locals.cids;
-					hasFilter = false;
-				}
-			}
-
-			// Pagination doesn't count as a filter
-			if (Object.keys(filters).length === 2 && filters.hasOwnProperty('page') && filters.hasOwnProperty('perPage')) {
-				hasFilter = false;
-			}
-
-			// Save filters into session unless removed
-			req.session.flags_filters = filters;
-
-			async.parallel({
-				flags: async.apply(flags.list, filters, req.uid),
-				analytics: async.apply(analytics.getDailyStatsForSet, 'analytics:flags', Date.now(), 30),
-				categories: async.apply(categories.buildForSelect, req.uid, 'read'),
-			}, next);
-		},
-		function (data) {
-			data.categories = filterCategories(res.locals.cids, data.categories);
-
-			res.render('flags/list', {
-				flags: data.flags.flags,
-				analytics: data.analytics,
-				categories: data.categories,
-				hasFilter: hasFilter,
-				filters: filters,
-				title: '[[pages:flags]]',
-				pagination: pagination.create(data.flags.page, data.flags.pageCount, req.query),
-			});
-		},
-	], next);
-};
-
-modsController.flags.detail = function (req, res, next) {
-	async.parallel({
-		isAdminOrGlobalMod: async.apply(user.isAdminOrGlobalMod, req.uid),
-		moderatedCids: async.apply(user.getModeratedCids, req.uid),
-		flagData: async.apply(flags.get, req.params.flagId),
-		assignees: async.apply(user.getAdminsandGlobalModsandModerators),
-		categories: async.apply(categories.buildForSelect, req.uid, 'read'),
-	}, function (err, results) {
-		if (err || !results.flagData) {
-			return next(err || new Error('[[error:invalid-data]]'));
-		} else if (!(results.isAdminOrGlobalMod || !!results.moderatedCids.length)) {
-			return next(new Error('[[error:no-privileges]]'));
-		}
-
-		if (!results.isAdminOrGlobalMod && results.moderatedCids.length) {
-			res.locals.cids = results.moderatedCids;
-		}
-
-		results.categories = filterCategories(res.locals.cids, results.categories);
-
-		if (results.flagData.type === 'user') {
-			results.flagData.type_path = 'uid';
-		} else if (results.flagData.type === 'post') {
-			results.flagData.type_path = 'post';
-		}
-
-		res.render('flags/detail', Object.assign(results.flagData, {
-			assignees: results.assignees,
-			type_bool: ['post', 'user', 'empty'].reduce(function (memo, cur) {
-				if (cur !== 'empty') {
-					memo[cur] = results.flagData.type === cur && (!results.flagData.target || !!Object.keys(results.flagData.target).length);
-				} else {
-					memo[cur] = !Object.keys(results.flagData.target).length;
-				}
-
-				return memo;
-			}, {}),
-			title: '[[pages:flag-details, ' + req.params.flagId + ']]',
-			categories: results.categories,
-		}));
-	});
-};
-
-function filterCategories(moderatedCids, categories) {
-	// If cids is populated, then slim down the categories list
-	if (moderatedCids) {
-		categories = categories.filter(function (category) {
-			return moderatedCids.includes(String(category.cid));
-		});
+	if (!isAdminOrGlobalMod && moderatedCids.length) {
+		res.locals.cids = moderatedCids.map(cid => String(cid));
 	}
 
-	return categories.reduce(function (memo, cur) {
-		if (!moderatedCids) {
-			memo[cur.cid] = cur.name;
-			return memo;
-		}
-
-		// If mod, remove categories they can't moderate
-		if (moderatedCids.includes(String(cur.cid))) {
-			memo[cur.cid] = cur.name;
+	// Parse query string params for filters, eliminate non-valid filters
+	filters = filters.reduce((memo, cur) => {
+		if (req.query.hasOwnProperty(cur) && typeof req.query[cur] === 'string') {
+			if (req.query[cur].trim() !== '') {
+				memo[cur] = req.query[cur].trim();
+			}
 		}
 
 		return memo;
 	}, {});
-}
 
-modsController.postQueue = function (req, res, next) {
-	async.waterfall([
-		function (next) {
-			user.isPrivileged(req.uid, next);
-		},
-		function (isPrivileged, next) {
-			if (!isPrivileged) {
-				return next();
-			}
-			adminPostQueueController.get(req, res, next);
-		},
-	], next);
+	let hasFilter = !!Object.keys(filters).length;
+
+	if (res.locals.cids) {
+		if (!filters.cid) {
+			// If mod and no cid filter, add filter for their modded categories
+			filters.cid = res.locals.cids;
+		} else if (Array.isArray(filters.cid)) {
+			// Remove cids they do not moderate
+			filters.cid = filters.cid.filter(cid => res.locals.cids.includes(String(cid)));
+		} else if (!res.locals.cids.includes(String(filters.cid))) {
+			filters.cid = res.locals.cids;
+			hasFilter = false;
+		}
+	}
+
+	// Pagination doesn't count as a filter
+	if (
+		(Object.keys(filters).length === 1 && filters.hasOwnProperty('page')) ||
+		(Object.keys(filters).length === 2 && filters.hasOwnProperty('page') && filters.hasOwnProperty('perPage'))
+	) {
+		hasFilter = false;
+	}
+
+	// Parse sort from query string
+	let sort;
+	if (req.query.sort) {
+		sort = sorts.includes(req.query.sort) ? req.query.sort : null;
+	}
+	if (sort === 'newest') {
+		sort = undefined;
+	}
+	hasFilter = hasFilter || !!sort;
+
+	const [flagsData, analyticsData, selectData] = await Promise.all([
+		flags.list({
+			filters: filters,
+			sort: sort,
+			uid: req.uid,
+			query: req.query,
+		}),
+		analytics.getDailyStatsForSet('analytics:flags', Date.now(), 30),
+		helpers.getSelectedCategory(filters.cid),
+	]);
+
+	res.render('flags/list', {
+		flags: flagsData.flags,
+		analytics: analyticsData,
+		selectedCategory: selectData.selectedCategory,
+		hasFilter: hasFilter,
+		filters: filters,
+		expanded: !!(filters.assignee || filters.reporterId || filters.targetUid),
+		sort: sort || 'newest',
+		title: '[[pages:flags]]',
+		pagination: pagination.create(flagsData.page, flagsData.pageCount, req.query),
+		breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[pages:flags]]' }]),
+	});
 };
 
+modsController.flags.detail = async function (req, res, next) {
+	const results = await utils.promiseParallel({
+		isAdminOrGlobalMod: user.isAdminOrGlobalMod(req.uid),
+		moderatedCids: user.getModeratedCids(req.uid),
+		flagData: flags.get(req.params.flagId),
+		assignees: user.getAdminsandGlobalModsandModerators(),
+		privileges: Promise.all(['global', 'admin'].map(async type => privileges[type].get(req.uid))),
+	});
+	results.privileges = { ...results.privileges[0], ...results.privileges[1] };
+
+	if (!results.flagData || (!(results.isAdminOrGlobalMod || !!results.moderatedCids.length))) {
+		return next();	// 404
+	}
+
+	if (results.flagData.type === 'user') {
+		results.flagData.type_path = 'uid';
+	} else if (results.flagData.type === 'post') {
+		results.flagData.type_path = 'post';
+	}
+
+	res.render('flags/detail', Object.assign(results.flagData, {
+		assignees: results.assignees,
+		type_bool: ['post', 'user', 'empty'].reduce((memo, cur) => {
+			if (cur !== 'empty') {
+				memo[cur] = results.flagData.type === cur && (
+					!results.flagData.target ||
+					!!Object.keys(results.flagData.target).length
+				);
+			} else {
+				memo[cur] = !Object.keys(results.flagData.target).length;
+			}
+
+			return memo;
+		}, {}),
+		title: `[[pages:flag-details, ${req.params.flagId}]]`,
+		privileges: results.privileges,
+		breadcrumbs: helpers.buildBreadcrumbs([
+			{ text: '[[pages:flags]]', url: '/flags' },
+			{ text: `[[pages:flag-details, ${req.params.flagId}]]` },
+		]),
+	}));
+};
+
+modsController.postQueue = async function (req, res, next) {
+	// Admins, global mods, and individual mods only
+	const isPrivileged = await user.isPrivileged(req.uid);
+	if (!isPrivileged) {
+		return next();
+	}
+	const { cid } = req.query;
+	const page = parseInt(req.query.page, 10) || 1;
+	const postsPerPage = 20;
+
+	let postData = await posts.getQueuedPosts();
+	const [isAdminOrGlobalMod, moderatedCids, categoriesData] = await Promise.all([
+		user.isAdminOrGlobalMod(req.uid),
+		user.getModeratedCids(req.uid),
+		helpers.getSelectedCategory(cid),
+	]);
+
+	if (cid && !moderatedCids.includes(Number(cid)) && !isAdminOrGlobalMod) {
+		return next();
+	}
+
+	postData = postData.filter(p => p &&
+		(!categoriesData.selectedCids.length || categoriesData.selectedCids.includes(p.category.cid)) &&
+		(isAdminOrGlobalMod || moderatedCids.includes(Number(p.category.cid))));
+
+	({ posts: postData } = await plugins.hooks.fire('filter:post-queue.get', {
+		posts: postData,
+		req: req,
+	}));
+
+	const pageCount = Math.max(1, Math.ceil(postData.length / postsPerPage));
+	const start = (page - 1) * postsPerPage;
+	const stop = start + postsPerPage - 1;
+	postData = postData.slice(start, stop + 1);
+
+	res.render('post-queue', {
+		title: '[[pages:post-queue]]',
+		posts: postData,
+		...categoriesData,
+		allCategoriesUrl: `post-queue${helpers.buildQueryString(req.query, 'cid', '')}`,
+		pagination: pagination.create(page, pageCount),
+		breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[pages:post-queue]]' }]),
+	});
+};

@@ -1,42 +1,29 @@
 'use strict';
 
-var async = require('async');
-var winston = require('winston');
-var nconf = require('nconf');
-var _ = require('lodash');
+const os = require('os');
+const winston = require('winston');
+const nconf = require('nconf');
+const _ = require('lodash');
+const path = require('path');
+const mkdirp = require('mkdirp');
 
-var cacheBuster = require('./cacheBuster');
-var meta;
+const cacheBuster = require('./cacheBuster');
+const { aliases } = require('./aliases');
 
-function step(target, callback) {
-	var startTime = Date.now();
-	winston.info('[build] ' + target + ' build started');
+let meta;
 
-	return function (err) {
-		if (err) {
-			winston.error('[build] ' + target + ' build failed');
-			return callback(err);
-		}
-
-		var time = (Date.now() - startTime) / 1000;
-
-		winston.info('[build] ' + target + ' build completed in ' + time + 'sec');
-		callback();
-	};
-}
-
-var targetHandlers = {
-	'plugin static dirs': function (parallel, callback) {
-		meta.js.linkStatics(callback);
+const targetHandlers = {
+	'plugin static dirs': async function () {
+		await meta.js.linkStatics();
 	},
-	'requirejs modules': function (parallel, callback) {
-		meta.js.buildModules(parallel, callback);
+	'requirejs modules': async function (parallel) {
+		await meta.js.buildModules(parallel);
 	},
-	'client js bundle': function (parallel, callback) {
-		meta.js.buildBundle('client', parallel, callback);
+	'client js bundle': async function (parallel) {
+		await meta.js.buildBundle('client', parallel);
 	},
-	'admin js bundle': function (parallel, callback) {
-		meta.js.buildBundle('admin', parallel, callback);
+	'admin js bundle': async function (parallel) {
+		await meta.js.buildBundle('admin', parallel);
 	},
 	javascript: [
 		'plugin static dirs',
@@ -44,101 +31,85 @@ var targetHandlers = {
 		'client js bundle',
 		'admin js bundle',
 	],
-	'client side styles': function (parallel, callback) {
-		meta.css.buildBundle('client', parallel, callback);
+	'client side styles': async function (parallel) {
+		await meta.css.buildBundle('client', parallel);
 	},
-	'admin control panel styles': function (parallel, callback) {
-		meta.css.buildBundle('admin', parallel, callback);
+	'admin control panel styles': async function (parallel) {
+		await meta.css.buildBundle('admin', parallel);
 	},
 	styles: [
 		'client side styles',
 		'admin control panel styles',
 	],
-	templates: function (parallel, callback) {
-		meta.templates.compile(callback);
+	templates: async function () {
+		await meta.templates.compile();
 	},
-	languages: function (parallel, callback) {
-		meta.languages.build(callback);
-	},
-	sounds: function (parallel, callback) {
-		meta.sounds.build(callback);
+	languages: async function () {
+		await meta.languages.build();
 	},
 };
 
-var aliases = {
-	'plugin static dirs': ['staticdirs'],
-	'requirejs modules': ['rjs', 'modules'],
-	'client js bundle': ['clientjs', 'clientscript', 'clientscripts'],
-	'admin js bundle': ['adminjs', 'adminscript', 'adminscripts'],
-	javascript: ['js'],
-	'client side styles': [
-		'clientcss', 'clientless', 'clientstyles', 'clientstyle',
-	],
-	'admin control panel styles': [
-		'admincss', 'adminless', 'adminstyles', 'adminstyle', 'acpcss', 'acpless', 'acpstyles', 'acpstyle',
-	],
-	styles: ['css', 'less', 'style'],
-	templates: ['tpl'],
-	languages: ['lang', 'i18n'],
-	sounds: ['sound'],
-};
-
-exports.aliases = aliases;
-
-aliases = Object.keys(aliases).reduce(function (prev, key) {
-	var arr = aliases[key];
-	arr.forEach(function (alias) {
+const aliasMap = Object.keys(aliases).reduce((prev, key) => {
+	const arr = aliases[key];
+	arr.forEach((alias) => {
 		prev[alias] = key;
 	});
 	prev[key] = key;
 	return prev;
 }, {});
 
-function beforeBuild(targets, callback) {
-	var db = require('../database');
+async function beforeBuild(targets) {
+	const db = require('../database');
 	require('colors');
 	process.stdout.write('  started'.green + '\n'.reset);
+	try {
+		await db.init();
+		meta = require('./index');
+		await meta.themes.setupPaths();
+		const plugins = require('../plugins');
+		await plugins.prepareForBuild(targets);
+		await mkdirp(path.join(__dirname, '../../build/public'));
+	} catch (err) {
+		winston.error(`[build] Encountered error preparing for build\n${err.stack}`);
+		throw err;
+	}
+}
 
-	async.series([
-		db.init,
-		function (next) {
-			meta = require('../meta');
-			meta.themes.setupPaths(next);
-		},
-		function (next)	{
-			var plugins = require('../plugins');
-			plugins.prepareForBuild(targets, next);
-		},
-	], function (err) {
-		if (err) {
-			winston.error('[build] Encountered error preparing for build', err);
-			return callback(err);
+const allTargets = Object.keys(targetHandlers).filter(name => typeof targetHandlers[name] === 'function');
+
+async function buildTargets(targets, parallel) {
+	const length = Math.max(...targets.map(name => name.length));
+
+	if (parallel) {
+		await Promise.all(
+			targets.map(
+				target => step(target, parallel, `${_.padStart(target, length)} `)
+			)
+		);
+	} else {
+		for (const target of targets) {
+			// eslint-disable-next-line no-await-in-loop
+			await step(target, parallel, `${_.padStart(target, length)} `);
 		}
-
-		callback();
-	});
+	}
 }
 
-var allTargets = Object.keys(targetHandlers).filter(function (name) {
-	return typeof targetHandlers[name] === 'function';
-});
-function buildTargets(targets, parallel, callback) {
-	var all = parallel ? async.each : async.eachSeries;
+async function step(target, parallel, targetStr) {
+	const startTime = Date.now();
+	winston.info(`[build] ${targetStr} build started`);
+	try {
+		await targetHandlers[target](parallel);
+		const time = (Date.now() - startTime) / 1000;
 
-	var length = Math.max.apply(Math, targets.map(function (name) {
-		return name.length;
-	}));
-
-	all(targets, function (target, next) {
-		targetHandlers[target](parallel, step(_.padStart(target, length) + ' ', next));
-	}, callback);
+		winston.info(`[build] ${targetStr} build completed in ${time}sec`);
+	} catch (err) {
+		winston.error(`[build] ${targetStr} build failed`);
+		throw err;
+	}
 }
 
-function build(targets, options, callback) {
-	if (!callback && typeof options === 'function') {
-		callback = options;
-		options = {};
-	} else if (!options) {
+exports.build = async function (targets, options) {
+	if (!options) {
 		options = {};
 	}
 
@@ -148,15 +119,22 @@ function build(targets, options, callback) {
 		targets = targets.split(',');
 	}
 
-	var parallel = !nconf.get('series') && !options.series;
+	let series = nconf.get('series') || options.series;
+	if (series === undefined) {
+		// Detect # of CPUs and select strategy as appropriate
+		winston.verbose('[build] Querying CPU core count for build strategy');
+		const cpus = os.cpus();
+		series = cpus.length < 4;
+		winston.verbose(`[build] System returned ${cpus.length} cores, opting for ${series ? 'series' : 'parallel'} build strategy`);
+	}
 
 	targets = targets
 		// get full target name
-		.map(function (target) {
+		.map((target) => {
 			target = target.toLowerCase().replace(/-/g, '');
-			if (!aliases[target]) {
-				winston.warn('[build] Unknown target: ' + target);
-				if (target.indexOf(',') !== -1) {
+			if (!aliasMap[target]) {
+				winston.warn(`[build] Unknown target: ${target}`);
+				if (target.includes(',')) {
 					winston.warn('[build] Are you specifying multiple targets? Separate them with spaces:');
 					winston.warn('[build]   e.g. `./nodebb build adminjs tpl`');
 				}
@@ -164,77 +142,51 @@ function build(targets, options, callback) {
 				return false;
 			}
 
-			return aliases[target];
+			return aliasMap[target];
 		})
 		// filter nonexistent targets
-		.filter(Boolean)
-		// map multitargets to their sets
-		.reduce(function (prev, target) {
-			if (Array.isArray(targetHandlers[target])) {
-				return prev.concat(targetHandlers[target]);
-			}
+		.filter(Boolean);
 
-			return prev.concat(target);
-		}, [])
-		// unique
-		.filter(function (target, i, arr) {
-			return arr.indexOf(target) === i;
-		});
+	// map multitargets to their sets
+	targets = _.uniq(_.flatMap(targets, target => (
+		Array.isArray(targetHandlers[target]) ?
+			targetHandlers[target] :
+			target
+	)));
 
-	winston.verbose('[build] building the following targets: ' + targets.join(', '));
-
-	if (typeof callback !== 'function') {
-		callback = function (err) {
-			if (err) {
-				winston.error(err);
-				process.exit(1);
-			} else {
-				process.exit(0);
-			}
-		};
-	}
+	winston.verbose(`[build] building the following targets: ${targets.join(', ')}`);
 
 	if (!targets) {
 		winston.info('[build] No valid targets supplied. Aborting.');
-		callback();
+		return;
 	}
 
-	var startTime;
-	var totalTime;
-	async.series([
-		async.apply(beforeBuild, targets),
-		function (next) {
-			var threads = parseInt(nconf.get('threads'), 10);
-			if (threads) {
-				require('./minifier').maxThreads = threads - 1;
-			}
-
-			if (parallel) {
-				winston.info('[build] Building in parallel mode');
-			} else {
-				winston.info('[build] Building in series mode');
-			}
-
-			startTime = Date.now();
-			buildTargets(targets, parallel, next);
-		},
-		function (next) {
-			totalTime = (Date.now() - startTime) / 1000;
-			cacheBuster.write(next);
-		},
-	], function (err) {
-		if (err) {
-			winston.error('[build] Encountered error during build step', err);
-			return callback(err);
+	try {
+		await beforeBuild(targets);
+		const threads = parseInt(nconf.get('threads'), 10);
+		if (threads) {
+			require('./minifier').maxThreads = threads - 1;
 		}
 
-		winston.info('[build] Asset compilation successful. Completed in ' + totalTime + 'sec.');
-		callback();
-	});
-}
+		if (!series) {
+			winston.info('[build] Building in parallel mode');
+		} else {
+			winston.info('[build] Building in series mode');
+		}
 
-exports.build = build;
-
-exports.buildAll = function (callback) {
-	build(allTargets, callback);
+		const startTime = Date.now();
+		await buildTargets(targets, !series);
+		const totalTime = (Date.now() - startTime) / 1000;
+		await cacheBuster.write();
+		winston.info(`[build] Asset compilation successful. Completed in ${totalTime}sec.`);
+	} catch (err) {
+		winston.error(`[build] Encountered error during build step\n${err.stack ? err.stack : err}`);
+		throw err;
+	}
 };
+
+exports.buildAll = async function () {
+	await exports.build(allTargets);
+};
+
+require('../promisify')(exports);

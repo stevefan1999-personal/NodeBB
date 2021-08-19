@@ -1,7 +1,12 @@
 'use strict';
 
 
-define('forum/search', ['search', 'autocomplete', 'storage'], function (searchModule, autocomplete, storage) {
+define('forum/search', [
+	'search',
+	'autocomplete',
+	'storage',
+	'hooks',
+], function (searchModule, autocomplete, storage, hooks) {
 	var	Search = {};
 
 	Search.init = function () {
@@ -13,7 +18,7 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 			updateFormItemVisiblity(searchIn.val());
 		});
 
-		highlightMatches(searchQuery);
+		searchModule.highlightMatches(searchQuery, $('.search-result-text p, .search-result-text.search-result-title a'));
 
 		$('#advanced-search').off('submit').on('submit', function (e) {
 			e.preventDefault();
@@ -51,7 +56,7 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 			searchData.showAs = form.find('#show-as-topics').is(':checked') ? 'topics' : 'posts';
 		}
 
-		$(window).trigger('action:search.getSearchDataFromDOM', {
+		hooks.fire('action:search.getSearchDataFromDOM', {
 			form: form,
 			data: searchData,
 		});
@@ -65,7 +70,9 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 	}
 
 	function fillOutForm() {
-		var params = utils.params();
+		var params = utils.params({
+			disableToType: true,
+		});
 
 		var searchData = searchModule.getSearchPreferences();
 		var formData = utils.merge(searchData, params);
@@ -74,11 +81,9 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 			if (ajaxify.data.term) {
 				$('#search-input').val(ajaxify.data.term);
 			}
-
-			if (formData.in) {
-				$('#search-in').val(formData.in);
-				updateFormItemVisiblity(formData.in);
-			}
+			formData.in = formData.in || ajaxify.data.searchDefaultIn;
+			$('#search-in').val(formData.in);
+			updateFormItemVisiblity(formData.in);
 
 			if (formData.matchWords) {
 				$('#match-words-filter').val(formData.matchWords);
@@ -118,8 +123,8 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 
 			if (formData.sortBy || ajaxify.data.searchDefaultSortBy) {
 				$('#post-sort-by').val(formData.sortBy || ajaxify.data.searchDefaultSortBy);
-				$('#post-sort-direction').val(formData.sortDirection);
 			}
+			$('#post-sort-direction').val(formData.sortDirection || 'desc');
 
 			if (formData.showAs) {
 				var isTopic = formData.showAs === 'topics';
@@ -128,37 +133,10 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 				$('#show-as-posts').prop('checked', isPost).parent().toggleClass('active', isPost);
 			}
 
-			$(window).trigger('action:search.fillOutForm', {
+			hooks.fire('action:search.fillOutForm', {
 				form: formData,
 			});
 		}
-	}
-
-	function highlightMatches(searchQuery) {
-		if (!searchQuery) {
-			return;
-		}
-
-		var regexStr = searchQuery.replace(/^"/, '').replace(/"$/, '').trim().split(' ').join('|');
-		var regex = new RegExp('(' + regexStr + ')', 'gi');
-
-		$('.search-result-text p, .search-result-text h4').each(function () {
-			var result = $(this);
-			var nested = [];
-
-			result.find('*').each(function () {
-				$(this).after('<!-- ' + nested.length + ' -->');
-				nested.push($('<div />').append($(this)));
-			});
-
-			result.html(result.html().replace(regex, '<strong>$1</strong>'));
-
-			for (var i = 0, ii = nested.length; i < ii; i += 1) {
-				result.html(result.html().replace('<!-- ' + i + ' -->', nested[i].html()));
-			}
-		});
-
-		$('.search-result-text').find('img:not(.not-responsive)').addClass('img-responsive');
 	}
 
 	function handleSavePreferences() {
@@ -184,15 +162,18 @@ define('forum/search', ['search', 'autocomplete', 'storage'], function (searchMo
 			confirmKeys: [13, 44],
 			trimValue: true,
 		});
-		autocomplete.user(userEl.siblings('.bootstrap-tagsinput').find('input'));
+		if (app.user.privileges['search:users']) {
+			autocomplete.user(userEl.siblings('.bootstrap-tagsinput').find('input'));
+		}
 
 		var tagEl = $('#has-tags');
 		tagEl.tagsinput({
 			confirmKeys: [13, 44],
 			trimValue: true,
 		});
-
-		autocomplete.tag(tagEl.siblings('.bootstrap-tagsinput').find('input'));
+		if (app.user.privileges['search:tags']) {
+			autocomplete.tag(tagEl.siblings('.bootstrap-tagsinput').find('input'));
+		}
 	}
 
 	return Search;

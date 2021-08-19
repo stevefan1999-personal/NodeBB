@@ -1,28 +1,28 @@
 'use strict';
 
-var async = require('async');
+const async = require('async');
 
 module.exports = {
 	name: 'Give global search privileges',
 	timestamp: Date.UTC(2018, 4, 28),
 	method: function (callback) {
-		var meta = require('../../meta');
-		var privileges = require('../../privileges');
-		var allowGuestSearching = parseInt(meta.config.allowGuestSearching, 10) === 1;
-		var allowGuestUserSearching = parseInt(meta.config.allowGuestUserSearching, 10) === 1;
+		const meta = require('../../meta');
+		const privileges = require('../../privileges');
+		const allowGuestSearching = parseInt(meta.config.allowGuestSearching, 10) === 1;
+		const allowGuestUserSearching = parseInt(meta.config.allowGuestUserSearching, 10) === 1;
 		async.waterfall([
 			function (next) {
-				privileges.global.give(['search:content', 'search:users', 'search:tags'], 'registered-users', next);
+				privileges.global.give(['groups:search:content', 'groups:search:users', 'groups:search:tags'], 'registered-users', next);
 			},
 			function (next) {
-				var guestPrivs = [];
+				const guestPrivs = [];
 				if (allowGuestSearching) {
-					guestPrivs.push('search:content');
+					guestPrivs.push('groups:search:content');
 				}
 				if (allowGuestUserSearching) {
-					guestPrivs.push('search:users');
+					guestPrivs.push('groups:search:users');
 				}
-				guestPrivs.push('search:tags');
+				guestPrivs.push('groups:search:tags');
 				privileges.global.give(guestPrivs, 'guests', next);
 			},
 		], callback);

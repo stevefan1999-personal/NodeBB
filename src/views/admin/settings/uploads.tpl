@@ -8,32 +8,46 @@
 		<form>
 			<div class="checkbox">
 				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input class="mdl-switch__input" type="checkbox" data-field="allowFileUploads">
-					<span class="mdl-switch__label"><strong>[[admin/settings/uploads:allow-files]]</strong></span>
-				</label>
-			</div>
-
-			<div class="checkbox">
-				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
 					<input class="mdl-switch__input" type="checkbox" data-field="privateUploads">
 					<span class="mdl-switch__label"><strong>[[admin/settings/uploads:private]]</strong></span>
 				</label>
 			</div>
 
+			<div class="checkbox">
+				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" data-field="stripEXIFData">
+					<span class="mdl-switch__label"><strong>[[admin/settings/uploads:strip-exif-data]]</strong></span>
+				</label>
+			</div>
+
 			<div class="form-group">
-				<label for="maximumImageWidth">[[admin/settings/uploads:private-extensions]]</label>
+				<label for="privateUploadsExtensions">[[admin/settings/uploads:private-extensions]]</label>
 				<input type="text" class="form-control" value="" data-field="privateUploadsExtensions" placeholder="">
 				<p class="help-block">
 					[[admin/settings/uploads:private-uploads-extensions-help]]
 				</p>
 			</div>
 
-			<div class="form-group">
-				<label for="maximumImageWidth">[[admin/settings/uploads:max-image-width]]</label>
-				<input type="text" class="form-control" value="760" data-field="maximumImageWidth" placeholder="760">
-				<p class="help-block">
-					[[admin/settings/uploads:max-image-width-help]]
-				</p>
+			<div class="row">
+				<div class="col-xs-6">
+					<div class="form-group">
+						<label for="resizeImageWidthThreshold">[[admin/settings/uploads:resize-image-width-threshold]]</label>
+						<input type="text" class="form-control" value="2000" data-field="resizeImageWidthThreshold" placeholder="2000">
+						<p class="help-block">
+							[[admin/settings/uploads:resize-image-width-threshold-help]]
+						</p>
+					</div>
+				</div>
+
+				<div class="col-xs-6">
+					<div class="form-group">
+						<label for="resizeImageWidth">[[admin/settings/uploads:resize-image-width]]</label>
+						<input type="text" class="form-control" value="760" data-field="resizeImageWidth" placeholder="760">
+						<p class="help-block">
+							[[admin/settings/uploads:resize-image-width-help]]
+						</p>
+					</div>
+				</div>
 			</div>
 
 			<div class="form-group">
@@ -49,6 +63,22 @@
 				<input type="text" class="form-control" value="2048" data-field="maximumFileSize">
 				<p class="help-block">
 					[[admin/settings/uploads:max-file-size-help]]
+				</p>
+			</div>
+
+			<div class="form-group">
+				<label for="rejectImageWidth">[[admin/settings/uploads:reject-image-width]]</label>
+				<input type="text" class="form-control" value="5000" data-field="rejectImageWidth" placeholder="5000">
+				<p class="help-block">
+					[[admin/settings/uploads:reject-image-width-help]]
+				</p>
+			</div>
+
+			<div class="form-group">
+				<label for="rejectImageHeight">[[admin/settings/uploads:reject-image-height]]</label>
+				<input type="text" class="form-control" value="5000" data-field="rejectImageHeight" placeholder="5000">
+				<p class="help-block">
+					[[admin/settings/uploads:reject-image-height-help]]
 				</p>
 			</div>
 
@@ -71,8 +101,26 @@
 					[[admin/settings/uploads:allowed-file-extensions-help]]
 				</p>
 			</div>
+
+			<div class="form-group">
+				<label for="uploadRateLimitThreshold">[[admin/settings/uploads:upload-limit-threshold]]</label>
+				<div class="row">
+					<div class="col-xs-2">
+						<input type="text" class="form-control" data-field="uploadRateLimitThreshold" />
+					</div>
+					<div class="col-xs-2">
+						<select class="form-control" data-field="uploadRateLimitCooldown">
+							<option value="60">[[admin/settings/uploads:upload-limit-threshold-per-minute, 1]]</option>
+							<option value="300">[[admin/settings/uploads:upload-limit-threshold-per-minutes, 5]]</option>
+							<option value="900">[[admin/settings/uploads:upload-limit-threshold-per-minutes, 15]]</option>
+							<option value="3600">[[admin/settings/uploads:upload-limit-threshold-per-minutes, 60]]</option>
+						</select>
+					</div>
+				</div>
+			</div>
 		</form>
 	</div>
+
 </div>
 
 <div class="row">
@@ -147,7 +195,7 @@
 			<p class="help-block">
 				[[admin/settings/uploads:default-covers-help]]
 			</p>
-			<input type="text" class="form-control input-lg" id="profile:defaultCovers" data-field="profile:defaultCovers" data-field-type="tagsinput" value="{config.relative_path}/assets/images/cover-default.png" placeholder="https://example.com/group1.png, https://example.com/group2.png" />
+			<input type="text" class="form-control input-lg" id="profile:defaultCovers" data-field="profile:defaultCovers" data-field-type="tagsinput" value="/assets/images/cover-default.png" placeholder="https://example.com/group1.png, https://example.com/group2.png" />
 		</form>
 	</div>
 </div>

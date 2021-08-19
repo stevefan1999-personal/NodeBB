@@ -1,40 +1,34 @@
 'use strict';
 
-var async = require('async');
-var nconf = require('nconf');
+const nconf = require('nconf');
+const validator = require('validator');
+const admin = require('./admin');
+const groups = require('../groups');
 
-var admin = require('./admin');
-var translator = require('../translator');
+const navigation = module.exports;
 
-var navigation = module.exports;
+const relative_path = nconf.get('relative_path');
 
-navigation.get = function (callback) {
-	if (admin.cache) {
-		return callback(null, admin.cache);
-	}
+navigation.get = async function (uid) {
+	let data = await admin.get();
 
-	async.waterfall([
-		admin.get,
-		function (data, next) {
-			data = data.filter(function (item) {
-				return item && item.enabled;
-			}).map(function (item) {
-				item.originalRoute = item.route;
+	data = data.filter(item => item && item.enabled).map((item) => {
+		item.originalRoute = validator.unescape(item.route);
 
-				if (!item.route.startsWith('http')) {
-					item.route = nconf.get('relative_path') + item.route;
-				}
+		if (!item.route.startsWith('http')) {
+			item.route = relative_path + item.route;
+		}
 
-				Object.keys(item).forEach(function (key) {
-					item[key] = translator.unescape(item[key]);
-				});
+		return item;
+	});
 
-				return item;
-			});
-
-			admin.cache = data;
-
-			next(null, data);
-		},
-	], callback);
+	const pass = await Promise.all(data.map(async (navItem) => {
+		if (!navItem.groups.length) {
+			return true;
+		}
+		return await groups.isMemberOfAny(uid, navItem.groups);
+	}));
+	return data.filter((navItem, i) => pass[i]);
 };
+
+require('../promisify')(navigation);

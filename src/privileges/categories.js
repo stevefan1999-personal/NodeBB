@@ -1,248 +1,218 @@
 
 'use strict';
 
-var async = require('async');
-var _ = require('lodash');
+const _ = require('lodash');
 
-var categories = require('../categories');
-var user = require('../user');
-var groups = require('../groups');
-var helpers = require('./helpers');
-var plugins = require('../plugins');
+const categories = require('../categories');
+const user = require('../user');
+const groups = require('../groups');
+const helpers = require('./helpers');
+const plugins = require('../plugins');
+const utils = require('../utils');
 
-module.exports = function (privileges) {
-	privileges.categories = {};
+const privsCategories = module.exports;
 
-	privileges.categories.list = function (cid, callback) {
-		// Method used in admin/category controller to show all users/groups with privs in that given cid
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					labels: function (next) {
-						async.parallel({
-							users: async.apply(plugins.fireHook, 'filter:privileges.list_human', privileges.privilegeLabels.slice()),
-							groups: async.apply(plugins.fireHook, 'filter:privileges.groups.list_human', privileges.privilegeLabels.slice()),
-						}, next);
-					},
-					users: function (next) {
-						helpers.getUserPrivileges(cid, 'filter:privileges.list', privileges.userPrivilegeList, next);
-					},
-					groups: function (next) {
-						helpers.getGroupPrivileges(cid, 'filter:privileges.groups.list', privileges.groupPrivilegeList, next);
-					},
-				}, next);
-			},
-			function (payload, next) {
-				// This is a hack because I can't do {labels.users.length} to echo the count in templates.js
-				payload.columnCount = payload.labels.users.length + 2;
-				next(null, payload);
-			},
-		], callback);
-	};
+privsCategories.privilegeLabels = [
+	{ name: '[[admin/manage/privileges:find-category]]' },
+	{ name: '[[admin/manage/privileges:access-category]]' },
+	{ name: '[[admin/manage/privileges:access-topics]]' },
+	{ name: '[[admin/manage/privileges:create-topics]]' },
+	{ name: '[[admin/manage/privileges:reply-to-topics]]' },
+	{ name: '[[admin/manage/privileges:schedule-topics]]' },
+	{ name: '[[admin/manage/privileges:tag-topics]]' },
+	{ name: '[[admin/manage/privileges:edit-posts]]' },
+	{ name: '[[admin/manage/privileges:view-edit-history]]' },
+	{ name: '[[admin/manage/privileges:delete-posts]]' },
+	{ name: '[[admin/manage/privileges:upvote-posts]]' },
+	{ name: '[[admin/manage/privileges:downvote-posts]]' },
+	{ name: '[[admin/manage/privileges:delete-topics]]' },
+	{ name: '[[admin/manage/privileges:view_deleted]]' },
+	{ name: '[[admin/manage/privileges:purge]]' },
+	{ name: '[[admin/manage/privileges:moderate]]' },
+];
 
-	privileges.categories.get = function (cid, uid, callback) {
-		var privs = ['topics:create', 'topics:read', 'topics:tag', 'read'];
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					privileges: function (next) {
-						helpers.isUserAllowedTo(privs, uid, cid, next);
-					},
-					isAdministrator: function (next) {
-						user.isAdministrator(uid, next);
-					},
-					isModerator: function (next) {
-						user.isModerator(uid, cid, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				var privData = _.zipObject(privs, results.privileges);
-				var isAdminOrMod = results.isAdministrator || results.isModerator;
+privsCategories.userPrivilegeList = [
+	'find',
+	'read',
+	'topics:read',
+	'topics:create',
+	'topics:reply',
+	'topics:schedule',
+	'topics:tag',
+	'posts:edit',
+	'posts:history',
+	'posts:delete',
+	'posts:upvote',
+	'posts:downvote',
+	'topics:delete',
+	'posts:view_deleted',
+	'purge',
+	'moderate',
+];
 
-				plugins.fireHook('filter:privileges.categories.get', {
-					'topics:create': privData['topics:create'] || isAdminOrMod,
-					'topics:read': privData['topics:read'] || isAdminOrMod,
-					'topics:tag': privData['topics:tag'] || isAdminOrMod,
-					read: privData.read || isAdminOrMod,
-					cid: cid,
-					uid: uid,
-					editable: isAdminOrMod,
-					view_deleted: isAdminOrMod,
-					isAdminOrMod: isAdminOrMod,
-				}, next);
-			},
-		], callback);
-	};
+privsCategories.groupPrivilegeList = privsCategories.userPrivilegeList.map(privilege => `groups:${privilege}`);
 
-	privileges.categories.isAdminOrMod = function (cid, uid, callback) {
-		if (!parseInt(uid, 10)) {
-			return callback(null, false);
-		}
-		helpers.some([
-			function (next) {
-				user.isModerator(uid, cid, next);
-			},
-			function (next) {
-				user.isAdministrator(uid, next);
-			},
-		], callback);
-	};
+privsCategories.privilegeList = privsCategories.userPrivilegeList.concat(privsCategories.groupPrivilegeList);
 
-	privileges.categories.isUserAllowedTo = function (privilege, cid, uid, callback) {
-		if (!cid) {
-			return callback(null, false);
-		}
-		helpers.isUserAllowedTo(privilege, uid, [cid], function (err, results) {
-			callback(err, Array.isArray(results) && results.length ? results[0] : false);
-		});
-	};
+// Method used in admin/category controller to show all users/groups with privs in that given cid
+privsCategories.list = async function (cid) {
+	const labels = await utils.promiseParallel({
+		users: plugins.hooks.fire('filter:privileges.list_human', privsCategories.privilegeLabels.slice()),
+		groups: plugins.hooks.fire('filter:privileges.groups.list_human', privsCategories.privilegeLabels.slice()),
+	});
 
-	privileges.categories.can = function (privilege, cid, uid, callback) {
-		if (!cid) {
-			return callback(null, false);
-		}
+	const keys = await utils.promiseParallel({
+		users: plugins.hooks.fire('filter:privileges.list', privsCategories.userPrivilegeList.slice()),
+		groups: plugins.hooks.fire('filter:privileges.groups.list', privsCategories.groupPrivilegeList.slice()),
+	});
 
-		async.waterfall([
-			function (next) {
-				categories.getCategoryField(cid, 'disabled', next);
-			},
-			function (disabled, next) {
-				if (parseInt(disabled, 10) === 1) {
-					return callback(null, false);
-				}
-				helpers.some([
-					function (next) {
-						helpers.isUserAllowedTo(privilege, uid, [cid], function (err, results) {
-							next(err, Array.isArray(results) && results.length ? results[0] : false);
-						});
-					},
-					function (next) {
-						user.isModerator(uid, cid, next);
-					},
-					function (next) {
-						user.isAdministrator(uid, next);
-					},
-				], next);
-			},
-		], callback);
-	};
+	const payload = await utils.promiseParallel({
+		labels,
+		users: helpers.getUserPrivileges(cid, keys.users),
+		groups: helpers.getGroupPrivileges(cid, keys.groups),
+	});
+	payload.keys = keys;
 
-	privileges.categories.filterCids = function (privilege, cids, uid, callback) {
-		if (!Array.isArray(cids) || !cids.length) {
-			return callback(null, []);
-		}
+	payload.columnCountUserOther = payload.labels.users.length - privsCategories.privilegeLabels.length;
+	payload.columnCountGroupOther = payload.labels.groups.length - privsCategories.privilegeLabels.length;
 
-		cids = _.uniq(cids);
+	return payload;
+};
 
-		async.waterfall([
-			function (next) {
-				privileges.categories.getBase(privilege, cids, uid, next);
-			},
-			function (results, next) {
-				cids = cids.filter(function (cid, index) {
-					return !results.categories[index].disabled &&
-						(results.allowedTo[index] || results.isAdmin || results.isModerators[index]);
-				});
+privsCategories.get = async function (cid, uid) {
+	const privs = [
+		'topics:create', 'topics:read', 'topics:schedule',
+		'topics:tag', 'read', 'posts:view_deleted',
+	];
 
-				next(null, cids.filter(Boolean));
-			},
-		], callback);
-	};
+	const [userPrivileges, isAdministrator, isModerator] = await Promise.all([
+		helpers.isAllowedTo(privs, uid, cid),
+		user.isAdministrator(uid),
+		user.isModerator(uid, cid),
+	]);
 
-	privileges.categories.getBase = function (privilege, cids, uid, callback) {
-		async.parallel({
-			categories: function (next) {
-				categories.getCategoriesFields(cids, ['disabled'], next);
-			},
-			allowedTo: function (next) {
-				helpers.isUserAllowedTo(privilege, uid, cids, next);
-			},
-			isModerators: function (next) {
-				user.isModerator(uid, cids, next);
-			},
-			isAdmin: function (next) {
-				user.isAdministrator(uid, next);
-			},
-		}, callback);
-	};
+	const combined = userPrivileges.map(allowed => allowed || isAdministrator);
+	const privData = _.zipObject(privs, combined);
+	const isAdminOrMod = isAdministrator || isModerator;
 
-	privileges.categories.filterUids = function (privilege, cid, uids, callback) {
-		if (!uids.length) {
-			return callback(null, []);
-		}
+	return await plugins.hooks.fire('filter:privileges.categories.get', {
+		...privData,
+		cid: cid,
+		uid: uid,
+		editable: isAdminOrMod,
+		view_deleted: isAdminOrMod || privData['posts:view_deleted'],
+		isAdminOrMod: isAdminOrMod,
+	});
+};
 
-		uids = _.uniq(uids);
+privsCategories.isAdminOrMod = async function (cid, uid) {
+	if (parseInt(uid, 10) <= 0) {
+		return false;
+	}
+	const [isAdmin, isMod] = await Promise.all([
+		user.isAdministrator(uid),
+		user.isModerator(uid, cid),
+	]);
+	return isAdmin || isMod;
+};
 
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					allowedTo: function (next) {
-						helpers.isUsersAllowedTo(privilege, uids, cid, next);
-					},
-					isModerators: function (next) {
-						user.isModerator(uids, cid, next);
-					},
-					isAdmins: function (next) {
-						user.isAdministrator(uids, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				uids = uids.filter(function (uid, index) {
-					return results.allowedTo[index] || results.isModerators[index] || results.isAdmins[index];
-				});
-				next(null, uids);
-			},
-		], callback);
-	};
+privsCategories.isUserAllowedTo = async function (privilege, cid, uid) {
+	if ((Array.isArray(privilege) && !privilege.length) || (Array.isArray(cid) && !cid.length)) {
+		return [];
+	}
+	if (!cid) {
+		return false;
+	}
+	const results = await helpers.isAllowedTo(privilege, uid, Array.isArray(cid) ? cid : [cid]);
 
-	privileges.categories.give = function (privileges, cid, groupName, callback) {
-		helpers.giveOrRescind(groups.join, privileges, cid, groupName, callback);
-	};
+	if (Array.isArray(results) && results.length) {
+		return Array.isArray(cid) ? results : results[0];
+	}
+	return false;
+};
 
-	privileges.categories.rescind = function (privileges, cid, groupName, callback) {
-		helpers.giveOrRescind(groups.leave, privileges, cid, groupName, callback);
-	};
+privsCategories.can = async function (privilege, cid, uid) {
+	if (!cid) {
+		return false;
+	}
+	const [disabled, isAdmin, isAllowed] = await Promise.all([
+		categories.getCategoryField(cid, 'disabled'),
+		user.isAdministrator(uid),
+		privsCategories.isUserAllowedTo(privilege, cid, uid),
+	]);
+	return !disabled && (isAllowed || isAdmin);
+};
 
-	privileges.categories.canMoveAllTopics = function (currentCid, targetCid, uid, callback) {
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					isAdministrator: function (next) {
-						user.isAdministrator(uid, next);
-					},
-					moderatorOfCurrent: function (next) {
-						user.isModerator(uid, currentCid, next);
-					},
-					moderatorOfTarget: function (next) {
-						user.isModerator(uid, targetCid, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				next(null, results.isAdministrator || (results.moderatorOfCurrent && results.moderatorOfTarget));
-			},
-		], callback);
-	};
+privsCategories.filterCids = async function (privilege, cids, uid) {
+	if (!Array.isArray(cids) || !cids.length) {
+		return [];
+	}
 
-	privileges.categories.userPrivileges = function (cid, uid, callback) {
-		var tasks = {};
+	cids = _.uniq(cids);
+	const [categoryData, allowedTo, isAdmin] = await Promise.all([
+		categories.getCategoriesFields(cids, ['disabled']),
+		helpers.isAllowedTo(privilege, uid, cids),
+		user.isAdministrator(uid),
+	]);
+	return cids.filter(
+		(cid, index) => !!cid && !categoryData[index].disabled && (allowedTo[index] || isAdmin)
+	);
+};
 
-		privileges.userPrivilegeList.forEach(function (privilege) {
-			tasks[privilege] = async.apply(groups.isMember, uid, 'cid:' + cid + ':privileges:' + privilege);
-		});
+privsCategories.getBase = async function (privilege, cids, uid) {
+	return await utils.promiseParallel({
+		categories: categories.getCategoriesFields(cids, ['disabled']),
+		allowedTo: helpers.isAllowedTo(privilege, uid, cids),
+		view_deleted: helpers.isAllowedTo('posts:view_deleted', uid, cids),
+		view_scheduled: helpers.isAllowedTo('topics:schedule', uid, cids),
+		isAdmin: user.isAdministrator(uid),
+	});
+};
 
-		async.parallel(tasks, callback);
-	};
+privsCategories.filterUids = async function (privilege, cid, uids) {
+	if (!uids.length) {
+		return [];
+	}
 
-	privileges.categories.groupPrivileges = function (cid, groupName, callback) {
-		var tasks = {};
+	uids = _.uniq(uids);
 
-		privileges.groupPrivilegeList.forEach(function (privilege) {
-			tasks[privilege] = async.apply(groups.isMember, groupName, 'cid:' + cid + ':privileges:' + privilege);
-		});
+	const [allowedTo, isAdmins] = await Promise.all([
+		helpers.isUsersAllowedTo(privilege, uids, cid),
+		user.isAdministrator(uids),
+	]);
+	return uids.filter((uid, index) => allowedTo[index] || isAdmins[index]);
+};
 
-		async.parallel(tasks, callback);
-	};
+privsCategories.give = async function (privileges, cid, members) {
+	await helpers.giveOrRescind(groups.join, privileges, cid, members);
+	plugins.hooks.fire('action:privileges.categories.give', {
+		privileges: privileges,
+		cids: Array.isArray(cid) ? cid : [cid],
+		members: Array.isArray(members) ? members : [members],
+	});
+};
+
+privsCategories.rescind = async function (privileges, cid, members) {
+	await helpers.giveOrRescind(groups.leave, privileges, cid, members);
+	plugins.hooks.fire('action:privileges.categories.rescind', {
+		privileges: privileges,
+		cids: Array.isArray(cid) ? cid : [cid],
+		members: Array.isArray(members) ? members : [members],
+	});
+};
+
+privsCategories.canMoveAllTopics = async function (currentCid, targetCid, uid) {
+	const [isAdmin, isModerators] = await Promise.all([
+		user.isAdministrator(uid),
+		user.isModerator(uid, [currentCid, targetCid]),
+	]);
+	return isAdmin || !isModerators.includes(false);
+};
+
+privsCategories.userPrivileges = async function (cid, uid) {
+	return await helpers.userOrGroupPrivileges(cid, uid, privsCategories.userPrivilegeList);
+};
+
+privsCategories.groupPrivileges = async function (cid, groupName) {
+	return await helpers.userOrGroupPrivileges(cid, groupName, privsCategories.groupPrivilegeList);
 };

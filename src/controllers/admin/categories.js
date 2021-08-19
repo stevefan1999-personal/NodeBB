@@ -1,67 +1,139 @@
 'use strict';
 
-var async = require('async');
+const _ = require('lodash');
+const nconf = require('nconf');
+const categories = require('../../categories');
+const analytics = require('../../analytics');
+const plugins = require('../../plugins');
+const translator = require('../../translator');
+const meta = require('../../meta');
+const helpers = require('../helpers');
+const pagination = require('../../pagination');
 
-var categories = require('../../categories');
-var analytics = require('../../analytics');
-var plugins = require('../../plugins');
-var translator = require('../../translator');
+const categoriesController = module.exports;
 
-var categoriesController = module.exports;
+categoriesController.get = async function (req, res, next) {
+	const [categoryData, parent, selectedData] = await Promise.all([
+		categories.getCategories([req.params.category_id], req.uid),
+		categories.getParents([req.params.category_id]),
+		helpers.getSelectedCategory(req.params.category_id),
+	]);
 
-categoriesController.get = function (req, res, callback) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				category: async.apply(categories.getCategories, [req.params.category_id], req.uid),
-				allCategories: async.apply(categories.buildForSelect, req.uid, 'read'),
-			}, next);
-		},
-		function (data, next) {
-			var category = data.category[0];
+	const category = categoryData[0];
+	if (!category) {
+		return next();
+	}
 
-			if (!category) {
-				return callback();
-			}
+	category.parent = parent[0];
 
-			data.allCategories.forEach(function (category) {
-				if (category) {
-					category.selected = parseInt(category.cid, 10) === parseInt(req.params.category_id, 10);
-				}
-			});
+	const data = await plugins.hooks.fire('filter:admin.category.get', {
+		req: req,
+		res: res,
+		category: category,
+		customClasses: [],
+	});
+	data.category.name = translator.escape(String(data.category.name));
+	data.category.description = translator.escape(String(data.category.description));
 
-			plugins.fireHook('filter:admin.category.get', {
-				req: req,
-				res: res,
-				category: category,
-				allCategories: data.allCategories,
-			}, next);
-		},
-		function (data) {
-			data.category.name = translator.escape(String(data.category.name));
-			res.render('admin/manage/category', {
-				category: data.category,
-				allCategories: data.allCategories,
-			});
-		},
-	], callback);
+	res.render('admin/manage/category', {
+		category: data.category,
+		selectedCategory: selectedData.selectedCategory,
+		customClasses: data.customClasses,
+		postQueueEnabled: !!meta.config.postQueue,
+	});
 };
 
-categoriesController.getAll = function (req, res) {
+categoriesController.getAll = async function (req, res) {
+	const rootCid = parseInt(req.query.cid, 10) || 0;
+	async function getRootAndChildren() {
+		const rootChildren = await categories.getAllCidsFromSet(`cid:${rootCid}:children`);
+		const childCids = _.flatten(await Promise.all(rootChildren.map(cid => categories.getChildrenCids(cid))));
+		return [rootCid].concat(rootChildren.concat(childCids));
+	}
+
 	// Categories list will be rendered on client side with recursion, etc.
-	res.render('admin/manage/categories', {});
+	const cids = await (rootCid ? getRootAndChildren() : categories.getAllCidsFromSet('categories:cid'));
+
+	let rootParent = 0;
+	if (rootCid) {
+		rootParent = await categories.getCategoryField(rootCid, 'parentCid') || 0;
+	}
+
+	const fields = [
+		'cid', 'name', 'icon', 'parentCid', 'disabled', 'link', 'order',
+		'color', 'bgColor', 'backgroundImage', 'imageClass', 'subCategoriesPerPage',
+	];
+	const categoriesData = await categories.getCategoriesFields(cids, fields);
+	const result = await plugins.hooks.fire('filter:admin.categories.get', { categories: categoriesData, fields: fields });
+	let tree = categories.getTree(result.categories, rootParent);
+
+	const cidsCount = rootCid ? cids.length - 1 : tree.length;
+
+	const pageCount = Math.max(1, Math.ceil(cidsCount / meta.config.categoriesPerPage));
+	const page = Math.min(parseInt(req.query.page, 10) || 1, pageCount);
+	const start = Math.max(0, (page - 1) * meta.config.categoriesPerPage);
+	const stop = start + meta.config.categoriesPerPage;
+
+	function trim(c) {
+		if (c.children) {
+			c.children = c.children.slice(0, c.subCategoriesPerPage);
+			c.children.forEach(c => trim(c));
+		}
+	}
+	if (rootCid && tree[0] && Array.isArray(tree[0].children)) {
+		tree[0].children = tree[0].children.slice(start, stop);
+		tree[0].children.forEach(trim);
+	} else {
+		tree = tree.slice(start, stop);
+		tree.forEach(trim);
+	}
+
+	let selectedCategory;
+	if (rootCid) {
+		selectedCategory = await categories.getCategoryData(rootCid);
+	}
+	const crumbs = await buildBreadcrumbs(req, selectedCategory);
+	res.render('admin/manage/categories', {
+		categoriesTree: tree,
+		selectedCategory: selectedCategory,
+		breadcrumbs: crumbs,
+		pagination: pagination.create(page, pageCount, req.query),
+		categoriesPerPage: meta.config.categoriesPerPage,
+	});
 };
 
-categoriesController.getAnalytics = function (req, res, next) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				name: async.apply(categories.getCategoryField, req.params.category_id, 'name'),
-				analytics: async.apply(analytics.getCategoryAnalytics, req.params.category_id),
-			}, next);
+async function buildBreadcrumbs(req, categoryData) {
+	if (!categoryData) {
+		return;
+	}
+	const breadcrumbs = [
+		{
+			text: categoryData.name,
+			url: `${nconf.get('relative_path')}/admin/manage/categories?cid=${categoryData.cid}`,
+			cid: categoryData.cid,
 		},
-		function (data) {
-			res.render('admin/manage/category-analytics', data);
-		},
-	], next);
+	];
+	const allCrumbs = await helpers.buildCategoryBreadcrumbs(categoryData.parentCid);
+	const crumbs = allCrumbs.filter(c => c.cid);
+
+	crumbs.forEach((c) => {
+		c.url = `/admin/manage/categories?cid=${c.cid}`;
+	});
+	crumbs.unshift({
+		text: '[[admin/manage/categories:top-level]]',
+		url: '/admin/manage/categories',
+	});
+
+	return crumbs.concat(breadcrumbs);
+}
+
+categoriesController.getAnalytics = async function (req, res) {
+	const [name, analyticsData] = await Promise.all([
+		categories.getCategoryField(req.params.category_id, 'name'),
+		analytics.getCategoryAnalytics(req.params.category_id),
+	]);
+	res.render('admin/manage/category-analytics', {
+		name: name,
+		analytics: analyticsData,
+	});
 };

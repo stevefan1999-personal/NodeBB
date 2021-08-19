@@ -1,45 +1,73 @@
 'use strict';
 
-var path = require('path');
-var fs = require('fs');
-var cproc = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const cproc = require('child_process');
 
-var packageFilePath = path.join(__dirname, '../../package.json');
-var packageDefaultFilePath = path.join(__dirname, '../../install/package.json');
-var modulesPath = path.join(__dirname, '../../node_modules');
+const { paths, pluginNamePattern } = require('../constants');
 
 function updatePackageFile() {
-	var oldPackageContents = {};
+	let oldPackageContents = {};
 
 	try {
-		oldPackageContents = JSON.parse(fs.readFileSync(packageFilePath, 'utf8'));
+		oldPackageContents = JSON.parse(fs.readFileSync(paths.currentPackage, 'utf8'));
 	} catch (e) {
 		if (e.code !== 'ENOENT') {
 			throw e;
 		}
 	}
 
-	var defaultPackageContents = JSON.parse(fs.readFileSync(packageDefaultFilePath, 'utf8'));
-	var packageContents = Object.assign({}, oldPackageContents, defaultPackageContents, {
-		dependencies: Object.assign({}, oldPackageContents.dependencies, defaultPackageContents.dependencies),
+	const defaultPackageContents = JSON.parse(fs.readFileSync(paths.installPackage, 'utf8'));
+
+	let dependencies = {};
+	Object.entries(oldPackageContents.dependencies || {}).forEach(([dep, version]) => {
+		if (pluginNamePattern.test(dep)) {
+			dependencies[dep] = version;
+		}
 	});
 
-	fs.writeFileSync(packageFilePath, JSON.stringify(packageContents, null, 2));
+	// Sort dependencies alphabetically
+	dependencies = sortDependencies({ ...dependencies, ...defaultPackageContents.dependencies });
+
+	const packageContents = { ...oldPackageContents, ...defaultPackageContents, dependencies: dependencies };
+
+	fs.writeFileSync(paths.currentPackage, JSON.stringify(packageContents, null, 2));
 }
 
 exports.updatePackageFile = updatePackageFile;
 
+exports.supportedPackageManager = [
+	'npm',
+	'cnpm',
+	'pnpm',
+	'yarn',
+];
+
 function installAll() {
-	var prod = global.env !== 'development';
-	var command = 'npm install';
+	const prod = global.env !== 'development';
+	let command = 'npm install';
 	try {
-		fs.accessSync(path.join(modulesPath, 'nconf/package.json'), fs.constants.R_OK);
-		var packageManager = require('nconf').get('package_manager');
-		if (packageManager === 'yarn') {
-			command = 'yarn';
+		fs.accessSync(path.join(paths.nodeModules, 'nconf/package.json'), fs.constants.R_OK);
+		const supportedPackageManagerList = exports.supportedPackageManager; // load config from src/cli/package-install.js
+		const packageManager = require('nconf').get('package_manager');
+		if (supportedPackageManagerList.indexOf(packageManager) >= 0) {
+			switch (packageManager) {
+				case 'yarn':
+					command = 'yarn';
+					break;
+				case 'pnpm':
+					command = 'pnpm install';
+					break;
+				case 'cnpm':
+					command = 'cnpm install';
+					break;
+				default:
+					break;
+			}
 		}
 	} catch (e) {
-		// ignore
+		// No error handling is required here.
+		// If nconf is not installed, regular package installation via npm is carried out.
 	}
 	try {
 		cproc.execSync(command + (prod ? ' --production' : ''), {
@@ -48,9 +76,9 @@ function installAll() {
 		});
 	} catch (e) {
 		console.log('Error installing dependencies!');
-		console.log('message: ' + e.message);
-		console.log('stdout: ' + e.stdout);
-		console.log('stderr: ' + e.stderr);
+		console.log(`message: ${e.message}`);
+		console.log(`stdout: ${e.stdout}`);
+		console.log(`stderr: ${e.stderr}`);
 		throw e;
 	}
 }
@@ -60,35 +88,44 @@ exports.installAll = installAll;
 function preserveExtraneousPlugins() {
 	// Skip if `node_modules/` is not found or inaccessible
 	try {
-		fs.accessSync(modulesPath, fs.constants.R_OK);
+		fs.accessSync(paths.nodeModules, fs.constants.R_OK);
 	} catch (e) {
 		return;
 	}
 
-	var isPackage = /^nodebb-(plugin|theme|widget|reward)-\w+/;
-	var packages = fs.readdirSync(modulesPath).filter(function (pkgName) {
-		return isPackage.test(pkgName);
-	});
-	var packageContents = JSON.parse(fs.readFileSync(packageFilePath, 'utf8'));
+	const packages = fs.readdirSync(paths.nodeModules)
+		.filter(pkgName => pluginNamePattern.test(pkgName));
 
-	var extraneous = packages
+	const packageContents = JSON.parse(fs.readFileSync(paths.currentPackage, 'utf8'));
+
+	const extraneous = packages
 		// only extraneous plugins (ones not in package.json) which are not links
-		.filter(function (pkgName) {
+		.filter((pkgName) => {
 			const extraneous = !packageContents.dependencies.hasOwnProperty(pkgName);
-			const isLink = fs.lstatSync(path.join(modulesPath, pkgName)).isSymbolicLink();
+			const isLink = fs.lstatSync(path.join(paths.nodeModules, pkgName)).isSymbolicLink();
 
 			return extraneous && !isLink;
 		})
 		// reduce to a map of package names to package versions
-		.reduce(function (map, pkgName) {
-			var pkgConfig = JSON.parse(fs.readFileSync(path.join(modulesPath, pkgName, 'package.json'), 'utf8'));
+		.reduce((map, pkgName) => {
+			const pkgConfig = JSON.parse(fs.readFileSync(path.join(paths.nodeModules, pkgName, 'package.json'), 'utf8'));
 			map[pkgName] = pkgConfig.version;
 			return map;
 		}, {});
 
 	// Add those packages to package.json
-	Object.assign(packageContents.dependencies, extraneous);
-	fs.writeFileSync(packageFilePath, JSON.stringify(packageContents, null, 2));
+	packageContents.dependencies = sortDependencies({ ...packageContents.dependencies, ...extraneous });
+
+	fs.writeFileSync(paths.currentPackage, JSON.stringify(packageContents, null, 2));
+}
+
+function sortDependencies(dependencies) {
+	return Object.entries(dependencies)
+		.sort((a, b) => (a < b ? -1 : 1))
+		.reduce((memo, pkg) => {
+			memo[pkg[0]] = pkg[1];
+			return memo;
+		}, {});
 }
 
 exports.preserveExtraneousPlugins = preserveExtraneousPlugins;

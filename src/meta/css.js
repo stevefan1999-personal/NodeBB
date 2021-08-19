@@ -1,176 +1,154 @@
 'use strict';
 
-var winston = require('winston');
-var nconf = require('nconf');
-var fs = require('fs');
-var path = require('path');
-var async = require('async');
+const winston = require('winston');
+const nconf = require('nconf');
+const fs = require('fs');
+const util = require('util');
+const path = require('path');
+const rimraf = require('rimraf');
 
-var plugins = require('../plugins');
-var db = require('../database');
-var file = require('../file');
-var minifier = require('./minifier');
+const rimrafAsync = util.promisify(rimraf);
 
-var CSS = module.exports;
+const plugins = require('../plugins');
+const db = require('../database');
+const file = require('../file');
+const minifier = require('./minifier');
 
-var buildImports = {
+const CSS = module.exports;
+
+CSS.supportedSkins = [
+	'cerulean', 'cyborg', 'flatly', 'journal', 'lumen', 'paper', 'simplex',
+	'spacelab', 'united', 'cosmo', 'darkly', 'readable', 'sandstone',
+	'slate', 'superhero', 'yeti',
+];
+
+const buildImports = {
 	client: function (source) {
-		return '@import "./theme";\n' + source + '\n' + [
-			'@import "font-awesome";',
-			'@import (inline) "../public/vendor/jquery/css/smoothness/jquery-ui.css";',
-			'@import (inline) "../public/vendor/jquery/bootstrap-tagsinput/bootstrap-tagsinput.css";',
-			'@import (inline) "../public/vendor/colorpicker/colorpicker.css";',
+		return `@import "./theme";\n${source}\n${[
+			'@import "../public/vendor/fontawesome/less/regular.less";',
+			'@import "../public/vendor/fontawesome/less/solid.less";',
+			'@import "../public/vendor/fontawesome/less/brands.less";',
+			'@import "../public/vendor/fontawesome/less/fontawesome.less";',
+			'@import "../public/vendor/fontawesome/less/v4-shims.less";',
+			'@import "../public/vendor/fontawesome/less/nodebb-shims.less";',
+			'@import "../../public/less/jquery-ui.less";',
+			'@import (inline) "../node_modules/@adactive/bootstrap-tagsinput/src/bootstrap-tagsinput.css";',
 			'@import (inline) "../node_modules/cropperjs/dist/cropper.css";',
 			'@import "../../public/less/flags.less";',
-			'@import "../../public/less/admin/manage/ip-blacklist.less";',
 			'@import "../../public/less/generics.less";',
 			'@import "../../public/less/mixins.less";',
 			'@import "../../public/less/global.less";',
-		].map(function (str) {
-			return str.replace(/\//g, path.sep);
-		}).join('\n');
+			'@import "../../public/less/modals.less";',
+		].map(str => str.replace(/\//g, path.sep)).join('\n')}`;
 	},
 	admin: function (source) {
-		return source + '\n' + [
-			'@import "font-awesome";',
+		return `${source}\n${[
+			'@import "../public/vendor/fontawesome/less/regular.less";',
+			'@import "../public/vendor/fontawesome/less/solid.less";',
+			'@import "../public/vendor/fontawesome/less/brands.less";',
+			'@import "../public/vendor/fontawesome/less/fontawesome.less";',
+			'@import "../public/vendor/fontawesome/less/v4-shims.less";',
+			'@import "../public/vendor/fontawesome/less/nodebb-shims.less";',
 			'@import "../public/less/admin/admin";',
 			'@import "../public/less/generics.less";',
-			'@import (inline) "../public/vendor/colorpicker/colorpicker.css";',
-			'@import (inline) "../public/vendor/jquery/css/smoothness/jquery-ui.css";',
-			'@import (inline) "../public/vendor/jquery/bootstrap-tagsinput/bootstrap-tagsinput.css";',
+			'@import "../../public/less/jquery-ui.less";',
+			'@import (inline) "../node_modules/@adactive/bootstrap-tagsinput/src/bootstrap-tagsinput.css";',
 			'@import (inline) "../public/vendor/mdl/material.css";',
-		].map(function (str) {
-			return str.replace(/\//g, path.sep);
-		}).join('\n');
+		].map(str => str.replace(/\//g, path.sep)).join('\n')}`;
 	},
 };
 
-function filterMissingFiles(filepaths, callback) {
-	async.filter(filepaths, function (filepath, next) {
-		file.exists(path.join(__dirname, '../../node_modules', filepath), function (err, exists) {
+async function filterMissingFiles(filepaths) {
+	const exists = await Promise.all(
+		filepaths.map(async (filepath) => {
+			const exists = await file.exists(path.join(__dirname, '../../node_modules', filepath));
 			if (!exists) {
-				winston.warn('[meta/css] File not found! ' + filepath);
+				winston.warn(`[meta/css] File not found! ${filepath}`);
 			}
-
-			next(err, exists);
-		});
-	}, callback);
+			return exists;
+		})
+	);
+	return filepaths.filter((filePath, i) => exists[i]);
 }
 
-function getImports(files, prefix, extension, callback) {
-	var pluginDirectories = [];
-	var source = '';
+async function getImports(files, prefix, extension) {
+	const pluginDirectories = [];
+	let source = '';
 
-	files.forEach(function (styleFile) {
+	files.forEach((styleFile) => {
 		if (styleFile.endsWith(extension)) {
-			source += prefix + path.sep + styleFile + '";';
+			source += `${prefix + path.sep + styleFile}";`;
 		} else {
 			pluginDirectories.push(styleFile);
 		}
 	});
-
-	async.each(pluginDirectories, function (directory, next) {
-		file.walk(directory, function (err, styleFiles) {
-			if (err) {
-				return next(err);
-			}
-
-			styleFiles.forEach(function (styleFile) {
-				source += prefix + path.sep + styleFile + '";';
-			});
-
-			next();
+	await Promise.all(pluginDirectories.map(async (directory) => {
+		const styleFiles = await file.walk(directory);
+		styleFiles.forEach((styleFile) => {
+			source += `${prefix + path.sep + styleFile}";`;
 		});
-	}, function (err) {
-		callback(err, source);
-	});
+	}));
+	return source;
 }
 
-function getBundleMetadata(target, callback) {
-	var paths = [
+async function getBundleMetadata(target) {
+	const paths = [
 		path.join(__dirname, '../../node_modules'),
 		path.join(__dirname, '../../public/less'),
 		path.join(__dirname, '../../public/vendor/fontawesome/less'),
 	];
 
-	async.waterfall([
-		function (next) {
-			if (target !== 'client') {
-				return next(null, null);
-			}
+	// Skin support
+	let skin;
+	if (target.startsWith('client-')) {
+		skin = target.split('-')[1];
 
-			db.getObjectFields('config', ['theme:type', 'theme:id'], next);
-		},
-		function (themeData, next) {
-			if (target === 'client') {
-				var themeId = (themeData['theme:id'] || 'nodebb-theme-persona');
-				var baseThemePath = path.join(nconf.get('themes_path'), (themeData['theme:type'] && themeData['theme:type'] === 'local' ? themeId : 'nodebb-theme-vanilla'));
-				paths.unshift(baseThemePath);
-			}
+		if (CSS.supportedSkins.includes(skin)) {
+			target = 'client';
+		}
+	}
+	let skinImport = [];
+	if (target === 'client') {
+		const themeData = await db.getObjectFields('config', ['theme:type', 'theme:id', 'bootswatchSkin']);
+		const themeId = (themeData['theme:id'] || 'nodebb-theme-persona');
+		const baseThemePath = path.join(nconf.get('themes_path'), (themeData['theme:type'] && themeData['theme:type'] === 'local' ? themeId : 'nodebb-theme-vanilla'));
+		paths.unshift(baseThemePath);
 
-			async.parallel({
-				less: function (cb) {
-					async.waterfall([
-						function (next) {
-							filterMissingFiles(plugins.lessFiles, next);
-						},
-						function (lessFiles, next) {
-							getImports(lessFiles, '\n@import ".', '.less', next);
-						},
-					], cb);
-				},
-				acpLess: function (cb) {
-					if (target === 'client') {
-						return cb(null, '');
-					}
+		themeData.bootswatchSkin = skin || themeData.bootswatchSkin;
+		if (themeData && themeData.bootswatchSkin) {
+			skinImport.push(`\n@import "./@nodebb/bootswatch/${themeData.bootswatchSkin}/variables.less";`);
+			skinImport.push(`\n@import "./@nodebb/bootswatch/${themeData.bootswatchSkin}/bootswatch.less";`);
+		}
+		skinImport = skinImport.join('');
+	}
 
-					async.waterfall([
-						function (next) {
-							filterMissingFiles(plugins.acpLessFiles, next);
-						},
-						function (acpLessFiles, next) {
-							getImports(acpLessFiles, '\n@import ".', '.less', next);
-						},
-					], cb);
-				},
-				css: function (cb) {
-					async.waterfall([
-						function (next) {
-							filterMissingFiles(plugins.cssFiles, next);
-						},
-						function (cssFiles, next) {
-							getImports(cssFiles, '\n@import (inline) ".', '.css', next);
-						},
-					], cb);
-				},
-			}, next);
-		},
-		function (result, next) {
-			var cssImports = result.css;
-			var lessImports = result.less;
-			var acpLessImports = result.acpLess;
+	const [lessImports, cssImports, acpLessImports] = await Promise.all([
+		moo(plugins.lessFiles, '\n@import ".', '.less'),
+		moo(plugins.cssFiles, '\n@import (inline) ".', '.css'),
+		target === 'client' ? '' : moo(plugins.acpLessFiles, '\n@import ".', '.less'),
+	]);
 
-			var imports = cssImports + '\n' + lessImports + '\n' + acpLessImports;
-			imports = buildImports[target](imports);
+	async function moo(files, prefix, extension) {
+		const filteredFiles = await filterMissingFiles(files);
+		return await getImports(filteredFiles, prefix, extension);
+	}
 
-			next(null, { paths: paths, imports: imports });
-		},
-	], callback);
+	let imports = `${skinImport}\n${cssImports}\n${lessImports}\n${acpLessImports}`;
+	imports = buildImports[target](imports);
+
+	return { paths: paths, imports: imports };
 }
 
-CSS.buildBundle = function (target, fork, callback) {
-	async.waterfall([
-		function (next) {
-			getBundleMetadata(target, next);
-		},
-		function (data, next) {
-			var minify = global.env !== 'development';
-			minifier.css.bundle(data.imports, data.paths, minify, fork, next);
-		},
-		function (bundle, next) {
-			var filename = (target === 'client' ? 'stylesheet' : 'admin') + '.css';
+CSS.buildBundle = async function (target, fork) {
+	if (target === 'client') {
+		await rimrafAsync(path.join(__dirname, '../../build/public/client*'));
+	}
 
-			fs.writeFile(path.join(__dirname, '../../build/public', filename), bundle.code, next);
-		},
-	], callback);
+	const data = await getBundleMetadata(target);
+	const minify = process.env.NODE_ENV !== 'development';
+	const bundle = await minifier.css.bundle(data.imports, data.paths, minify, fork);
+
+	const filename = `${target}.css`;
+	await fs.promises.writeFile(path.join(__dirname, '../../build/public', filename), bundle.code);
+	return bundle.code;
 };

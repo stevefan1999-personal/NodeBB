@@ -1,25 +1,21 @@
 'use strict';
 
 
-define('forum/chats/messages', ['components', 'sounds', 'translator', 'benchpress'], function (components, sounds, translator, Benchpress) {
+define('forum/chats/messages', ['components', 'translator', 'benchpress', 'hooks'], function (components, translator, Benchpress, hooks) {
 	var messages = {};
 
 	messages.sendMessage = function (roomId, inputEl) {
 		var msg = inputEl.val();
 		var mid = inputEl.attr('data-mid');
 
-		if (msg.length > ajaxify.data.maximumChatMessageLength) {
-			return app.alertError('[[error:chat-message-too-long,' + ajaxify.data.maximumChatMessageLength + ']]');
-		}
-
-		if (!msg.length) {
+		if (!msg.trim().length) {
 			return;
 		}
 
 		inputEl.val('');
 		inputEl.removeAttr('data-mid');
 		messages.updateRemainingLength(inputEl.parent());
-		$(window).trigger('action:chat.sent', {
+		hooks.fire('action:chat.sent', {
 			roomId: roomId,
 			message: msg,
 			mid: mid,
@@ -45,8 +41,6 @@ define('forum/chats/messages', ['components', 'sounds', 'translator', 'benchpres
 						timeout: 10000,
 					});
 				}
-
-				sounds.play('chat-outgoing');
 			});
 		} else {
 			socket.emit('modules.chats.edit', {
@@ -68,6 +62,9 @@ define('forum/chats/messages', ['components', 'sounds', 'translator', 'benchpres
 		var element = parent.find('[component="chat/input"]');
 		parent.find('[component="chat/message/length"]').text(element.val().length);
 		parent.find('[component="chat/message/remaining"]').text(config.maximumChatMessageLength - element.val().length);
+		hooks.fire('action:chat.updateRemainingLength', {
+			parent: parent,
+		});
 	};
 
 	messages.appendChatMessage = function (chatContentEl, data) {
@@ -85,31 +82,59 @@ define('forum/chats/messages', ['components', 'sounds', 'translator', 'benchpres
 
 	function onMessagesParsed(chatContentEl, html) {
 		var newMessage = $(html);
-
+		var isAtBottom = messages.isAtBottom(chatContentEl);
 		newMessage.appendTo(chatContentEl);
 		newMessage.find('.timeago').timeago();
 		newMessage.find('img:not(.not-responsive)').addClass('img-responsive');
-		messages.scrollToBottom(chatContentEl);
+		if (isAtBottom) {
+			messages.scrollToBottom(chatContentEl);
+		}
 
-		$(window).trigger('action:chat.received', {
+		hooks.fire('action:chat.received', {
 			messageEl: newMessage,
 		});
 	}
 
 
 	messages.parseMessage = function (data, callback) {
-		Benchpress.parse('partials/chats/message' + (Array.isArray(data) ? 's' : ''), {
-			messages: data,
-		}, function (html) {
+		function done(html) {
 			translator.translate(html, callback);
-		});
+		}
+
+		if (Array.isArray(data)) {
+			Benchpress.render('partials/chats/message' + (Array.isArray(data) ? 's' : ''), {
+				messages: data,
+			}).then(done);
+		} else {
+			Benchpress.render('partials/chats/' + (data.system ? 'system-message' : 'message'), {
+				messages: data,
+			}).then(done);
+		}
 	};
 
+	messages.isAtBottom = function (containerEl, threshold) {
+		if (containerEl.length) {
+			var distanceToBottom = containerEl[0].scrollHeight - (
+				containerEl.outerHeight() + containerEl.scrollTop()
+			);
+			return distanceToBottom < (threshold || 100);
+		}
+	};
 
 	messages.scrollToBottom = function (containerEl) {
-		if (containerEl.length) {
+		if (containerEl && containerEl.length) {
 			containerEl.scrollTop(containerEl[0].scrollHeight - containerEl.height());
+			containerEl.parent()
+				.find('[component="chat/messages/scroll-up-alert"]')
+				.addClass('hidden');
 		}
+	};
+
+	messages.toggleScrollUpAlert = function (containerEl) {
+		var isAtBottom = messages.isAtBottom(containerEl, 300);
+		containerEl.parent()
+			.find('[component="chat/messages/scroll-up-alert"]')
+			.toggleClass('hidden', isAtBottom);
 	};
 
 	messages.prepEdit = function (inputEl, messageId, roomId) {
@@ -122,26 +147,53 @@ define('forum/chats/messages', ['components', 'sounds', 'translator', 'benchpres
 				// By setting the `data-mid` attribute, I tell the chat code that I am editing a
 				// message, instead of posting a new one.
 				inputEl.attr('data-mid', messageId).addClass('editing');
-				inputEl.val(raw);
+				inputEl.val(raw).focus();
+
+				hooks.fire('action:chat.prepEdit', {
+					inputEl: inputEl,
+					messageId: messageId,
+					roomId: roomId,
+				});
 			}
 		});
 	};
 
-	messages.onChatMessageEdit = function () {
-		socket.on('event:chats.edit', function (data) {
-			data.messages.forEach(function (message) {
-				var self = parseInt(message.fromuid, 10) === parseInt(app.user.uid, 10);
-				message.self = self ? 1 : 0;
-				messages.parseMessage(message, function (html) {
-					var body = components.get('chat/message', message.messageId);
-					if (body.length) {
-						body.replaceWith(html);
-						components.get('chat/message', message.messageId).find('.timeago').timeago();
-					}
-				});
+	messages.addSocketListeners = function () {
+		socket.removeListener('event:chats.edit', onChatMessageEdited);
+		socket.on('event:chats.edit', onChatMessageEdited);
+
+		socket.removeListener('event:chats.delete', onChatMessageDeleted);
+		socket.on('event:chats.delete', onChatMessageDeleted);
+
+		socket.removeListener('event:chats.restore', onChatMessageRestored);
+		socket.on('event:chats.restore', onChatMessageRestored);
+	};
+
+	function onChatMessageEdited(data) {
+		data.messages.forEach(function (message) {
+			var self = parseInt(message.fromuid, 10) === parseInt(app.user.uid, 10);
+			message.self = self ? 1 : 0;
+			messages.parseMessage(message, function (html) {
+				var body = components.get('chat/message', message.messageId);
+				if (body.length) {
+					body.replaceWith(html);
+					components.get('chat/message', message.messageId).find('.timeago').timeago();
+				}
 			});
 		});
-	};
+	}
+
+	function onChatMessageDeleted(messageId) {
+		components.get('chat/message', messageId)
+			.toggleClass('deleted', true)
+			.find('[component="chat/message/body"]').translateHtml('[[modules:chat.message-deleted]]');
+	}
+
+	function onChatMessageRestored(message) {
+		components.get('chat/message', message.messageId)
+			.toggleClass('deleted', false)
+			.find('[component="chat/message/body"]').html(message.content);
+	}
 
 	messages.delete = function (messageId, roomId) {
 		translator.translate('[[modules:chat.delete_message_confirm]]', function (translated) {

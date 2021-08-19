@@ -1,68 +1,54 @@
 'use strict';
 
-var async = require('async');
-var groups = require('../../groups');
+const groups = require('../../groups');
+const sockets = require('..');
+const api = require('../../api');
 
-var Groups = module.exports;
+const Groups = module.exports;
 
-Groups.create = function (socket, data, callback) {
+Groups.create = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'POST /api/v3/groups');
+
 	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	} else if (groups.isPrivilegeGroup(data.name)) {
-		return callback(new Error('[[error:invalid-group-name]]'));
+		throw new Error('[[error:invalid-group-name]]');
 	}
 
-	groups.create({
+	return await groups.create({
 		name: data.name,
 		description: data.description,
+		private: data.private,
+		hidden: data.hidden,
 		ownerUid: socket.uid,
-	}, callback);
+	});
 };
 
-Groups.join = function (socket, data, callback) {
+Groups.join = async (socket, data) => {
+	sockets.warnDeprecated(socket, 'PUT /api/v3/groups/:slug/membership/:uid');
 	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
-
-	async.waterfall([
-		function (next) {
-			groups.isMember(data.uid, data.groupName, next);
-		},
-		function (isMember, next) {
-			if (isMember) {
-				return next(new Error('[[error:group-already-member]]'));
-			}
-			groups.join(data.groupName, data.uid, next);
-		},
-	], callback);
+	const slug = await groups.getGroupField(data.groupName, 'slug');
+	return await api.groups.join(socket, { slug: slug, uid: data.uid });
 };
 
-Groups.leave = function (socket, data, callback) {
+Groups.leave = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'DELETE /api/v3/groups/:slug/membership/:uid');
 	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
-
-	if (socket.uid === parseInt(data.uid, 10) && data.groupName === 'administrators') {
-		return callback(new Error('[[error:cant-remove-self-as-admin]]'));
-	}
-
-	async.waterfall([
-		function (next) {
-			groups.isMember(data.uid, data.groupName, next);
-		},
-		function (isMember, next) {
-			if (!isMember) {
-				return next(new Error('[[error:group-not-member]]'));
-			}
-			groups.leave(data.groupName, data.uid, next);
-		},
-	], callback);
+	const slug = await groups.getGroupField(data.groupName, 'slug');
+	await api.groups.leave(socket, { slug: slug, uid: data.uid });
 };
 
-Groups.update = function (socket, data, callback) {
+Groups.update = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'PUT /api/v3/groups/:slug');
 	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
 
-	groups.update(data.groupName, data.values, callback);
+	const slug = await groups.getGroupField(data.groupName, 'slug');
+	await api.groups.update(socket, { slug, ...data.values });
+	// await groups.update(data.groupName, data.values);
 };

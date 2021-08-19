@@ -5,6 +5,19 @@
 	<div class="col-sm-10 col-xs-12">
 		<form>
 			<div class="form-group">
+				<a class="btn btn-primary" href="{config.relative_path}/admin/manage/tags">
+					<i class="fa fa-external-link"></i>
+					[[admin/settings/tags:link-to-manage]]
+				</a>
+			</div>
+			<div class="form-group">
+				<label for="systemTags">[[admin/settings/tags:system-tags]]</label>
+				<input type="text" class="form-control" value="" data-field="systemTags" data-field-type="tagsinput" />
+				<p class="help-block">
+					[[admin/settings/tags:system-tags-help]]
+				</p>
+			</div>
+			<div class="form-group">
 				<label for="minimumTagsPerTopics">[[admin/settings/tags:min-per-topic]]</label>
 				<input id="minimumTagsPerTopics" type="text" class="form-control" value="0" data-field="minimumTagsPerTopic">
 			</div>
@@ -19,22 +32,6 @@
 			<div class="form-group">
 				<label for="maximumTagLength">[[admin/settings/tags:max-length]]</label>
 				<input id="maximumTagLength" type="text" class="form-control" value="15" data-field="maximumTagLength">
-			</div>
-		</form>
-		<a href="{config.relative_path}/admin/manage/tags">[[admin/settings/tags:goto-manage]]</a>
-	</div>
-</div>
-
-
-<div class="row">
-	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/tags:privacy]]</div>
-	<div class="col-sm-10 col-xs-12">
-		<form>
-			<div class="checkbox">
-				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input class="mdl-switch__input" type="checkbox" data-field="privateTagListing">
-					<span class="mdl-switch__label">[[admin/settings/tags:list-private]]</span>
-				</label>
 			</div>
 		</form>
 	</div>

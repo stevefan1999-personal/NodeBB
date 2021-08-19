@@ -1,28 +1,29 @@
 'use strict';
 
 
-define('admin/settings', ['uploader'], function (uploader) {
+define('admin/settings', ['uploader', 'mousetrap', 'hooks'], function (uploader, mousetrap, hooks) {
 	var Settings = {};
 
-	Settings.init = function () {
-		console.warn('[deprecation] require(\'admin/settings\').init() has been deprecated, please call require(\'admin/settings\').prepare() directly instead.');
-		Settings.prepare();
-	};
-
 	Settings.populateTOC = function () {
-		$('.settings-header').each(function () {
-			var header = $(this).text();
-			var anchor = header.toLowerCase().replace(/ /g, '-').trim();
+		var headers = $('.settings-header');
 
-			$(this).prepend('<a name="' + anchor + '"></a>');
-			$('.section-content ul').append('<li><a href="#' + anchor + '">' + header + '</a></li>');
-		});
+		if (headers.length > 1) {
+			headers.each(function () {
+				var header = $(this).text();
+				var anchor = header.toLowerCase().replace(/ /g, '-').trim();
 
-		var scrollTo = $('a[name="' + window.location.hash.replace('#', '') + '"]');
-		if (scrollTo.length) {
-			$('html, body').animate({
-				scrollTop: (scrollTo.offset().top) + 'px',
-			}, 400);
+				$(this).prepend('<a name="' + anchor + '"></a>');
+				$('.section-content ul').append('<li><a href="#' + anchor + '">' + header + '</a></li>');
+			});
+
+			var scrollTo = $('a[name="' + window.location.hash.replace('#', '') + '"]');
+			if (scrollTo.length) {
+				$('html, body').animate({
+					scrollTop: (scrollTo.offset().top) + 'px',
+				}, 400);
+			}
+		} else {
+			$('.content-header').parents('.row').remove();
 		}
 	};
 
@@ -38,39 +39,21 @@ define('admin/settings', ['uploader'], function (uploader) {
 		var field;
 
 		// Handle unsaved changes
-		$(fields).on('change', function () {
+		fields.on('change', function () {
 			app.flags = app.flags || {};
 			app.flags._unsaved = true;
 		});
-
+		var defaultInputs = ['text', 'hidden', 'password', 'textarea', 'number'];
 		for (x = 0; x < numFields; x += 1) {
 			field = fields.eq(x);
 			key = field.attr('data-field');
 			inputType = field.attr('type');
-			if (field.is('input')) {
-				if (app.config[key]) {
-					switch (inputType) {
-					case 'text':
-					case 'hidden':
-					case 'password':
-					case 'textarea':
-					case 'number':
-						field.val(app.config[key]);
-						break;
-
-					case 'checkbox':
-						var checked = parseInt(app.config[key], 10) === 1;
-						field.prop('checked', checked);
-						field.parents('.mdl-switch').toggleClass('is-checked', checked);
-						break;
-					}
-				}
-			} else if (field.is('textarea')) {
-				if (app.config.hasOwnProperty(key)) {
-					field.val(app.config[key]);
-				}
-			} else if (field.is('select')) {
-				if (app.config.hasOwnProperty(key)) {
+			if (app.config.hasOwnProperty(key)) {
+				if (field.is('input') && inputType === 'checkbox') {
+					var checked = parseInt(app.config[key], 10) === 1;
+					field.prop('checked', checked);
+					field.parents('.mdl-switch').toggleClass('is-checked', checked);
+				} else if (field.is('textarea') || field.is('select') || (field.is('input') && defaultInputs.indexOf(inputType) !== -1)) {
 					field.val(app.config[key]);
 				}
 			}
@@ -104,8 +87,13 @@ define('admin/settings', ['uploader'], function (uploader) {
 					type: 'success',
 				});
 
-				$(window).trigger('action:admin.settingsSaved');
+				hooks.fire('action:admin.settingsSaved');
 			});
+		});
+
+		mousetrap.bind('ctrl+s', function (ev) {
+			saveBtn.click();
+			ev.preventDefault();
 		});
 
 		handleUploads();
@@ -123,7 +111,7 @@ define('admin/settings', ['uploader'], function (uploader) {
 		}
 
 		setTimeout(function () {
-			$(window).trigger('action:admin.settingsLoaded');
+			hooks.fire('action:admin.settingsLoaded');
 		}, 0);
 	};
 
@@ -139,12 +127,7 @@ define('admin/settings', ['uploader'], function (uploader) {
 					showHelp: uploadBtn.attr('data-help') ? uploadBtn.attr('data-help') === 1 : undefined,
 					accept: uploadBtn.attr('data-accept'),
 				}, function (image) {
-					// need to move these into template, ex data-callback
-					if (ajaxify.currentPage === 'admin/general/sounds') {
-						ajaxify.refresh();
-					} else {
-						$('#' + uploadBtn.attr('data-target')).val(image);
-					}
+					$('#' + uploadBtn.attr('data-target')).val(image);
 				});
 			});
 		});
@@ -174,17 +157,17 @@ define('admin/settings', ['uploader'], function (uploader) {
 			if (field.is('input')) {
 				inputType = field.attr('type');
 				switch (inputType) {
-				case 'text':
-				case 'password':
-				case 'hidden':
-				case 'textarea':
-				case 'number':
-					value = field.val();
-					break;
+					case 'text':
+					case 'password':
+					case 'hidden':
+					case 'textarea':
+					case 'number':
+						value = field.val();
+						break;
 
-				case 'checkbox':
-					value = field.prop('checked') ? '1' : '0';
-					break;
+					case 'checkbox':
+						value = field.prop('checked') ? '1' : '0';
+						break;
 				}
 			} else if (field.is('textarea') || field.is('select')) {
 				value = field.val();

@@ -1,10 +1,13 @@
 'use strict';
 
 
-define('forum/users', ['translator', 'benchpress'], function (translator, Benchpress) {
+define('forum/users', [
+	'translator', 'benchpress', 'api', 'accounts/invite',
+], function (translator, Benchpress, api, AccountInvite) {
 	var	Users = {};
 
 	var searchTimeoutID = 0;
+	var searchResultCount = 0;
 
 	$(window).on('action:ajaxify.start', function () {
 		if (searchTimeoutID) {
@@ -17,17 +20,19 @@ define('forum/users', ['translator', 'benchpress'], function (translator, Benchp
 		app.enterRoom('user_list');
 
 		var section = utils.params().section ? ('?section=' + utils.params().section) : '';
-		$('.nav-pills li').removeClass('active').find('a[href="' + window.location.pathname + section + '"]').parent().addClass('active');
+		$('.nav-pills li').removeClass('active').find('a[href="' + window.location.pathname + section + '"]').parent()
+			.addClass('active');
 
-		handleSearch();
+		Users.handleSearch();
 
-		handleInvite();
+		AccountInvite.handle();
 
 		socket.removeListener('event:user_status_change', onUserStatusChange);
 		socket.on('event:user_status_change', onUserStatusChange);
 	};
 
-	function handleSearch() {
+	Users.handleSearch = function (params) {
+		searchResultCount = params && params.resultCount;
 		searchTimeoutID = 0;
 
 		$('#search-user').on('keyup', function () {
@@ -36,13 +41,13 @@ define('forum/users', ['translator', 'benchpress'], function (translator, Benchp
 				searchTimeoutID = 0;
 			}
 
-			searchTimeoutID = setTimeout(doSearch, 150);
+			searchTimeoutID = setTimeout(doSearch, 250);
 		});
 
 		$('.search select, .search input[type="checkbox"]').on('change', function () {
 			doSearch();
 		});
-	}
+	};
 
 	function doSearch() {
 		$('[component="user/search/icon"]').removeClass('fa-search').addClass('fa-spinner fa-spin');
@@ -58,17 +63,20 @@ define('forum/users', ['translator', 'benchpress'], function (translator, Benchp
 			return loadPage(query);
 		}
 
-		query.term = username;
+		query.query = username;
 		query.sortBy = getSortBy();
-
+		var filters = [];
 		if ($('.search .online-only').is(':checked') || (activeSection === 'online')) {
-			query.onlineOnly = true;
+			filters.push('online');
 		}
 		if (activeSection === 'banned') {
-			query.bannedOnly = true;
+			filters.push('banned');
 		}
 		if (activeSection === 'flagged') {
-			query.flaggedOnly = true;
+			filters.push('flagged');
+		}
+		if (filters.length) {
+			query.filters = filters;
 		}
 
 		loadPage(query);
@@ -89,26 +97,25 @@ define('forum/users', ['translator', 'benchpress'], function (translator, Benchp
 
 
 	function loadPage(query) {
-		var qs = decodeURIComponent($.param(query));
-		$.get(config.relative_path + '/api/users?' + qs, renderSearchResults).fail(function (xhrErr) {
-			if (xhrErr && xhrErr.responseJSON && xhrErr.responseJSON.error) {
-				app.alertError(xhrErr.responseJSON.error);
-			}
-		});
+		api.get('/api/users', query)
+			.then(renderSearchResults)
+			.catch(app.alertError);
 	}
 
 	function renderSearchResults(data) {
-		Benchpress.parse('partials/paginator', { pagination: data.pagination }, function (html) {
+		Benchpress.render('partials/paginator', { pagination: data.pagination }).then(function (html) {
 			$('.pagination-container').replaceWith(html);
 		});
 
-		Benchpress.parse('users', 'users', data, function (html) {
-			translator.translate(html, function (translated) {
-				translated = $(translated);
-				$('#users-container').html(translated);
-				translated.find('span.timeago').timeago();
-				$('[component="user/search/icon"]').addClass('fa-search').removeClass('fa-spinner fa-spin');
-			});
+		if (searchResultCount) {
+			data.users = data.users.slice(0, searchResultCount);
+		}
+
+		data.isAdminOrGlobalMod = app.user.isAdmin || app.user.isGlobalMod;
+		app.parseAndTranslate('users', 'users', data, function (html) {
+			$('#users-container').html(html);
+			html.find('span.timeago').timeago();
+			$('[component="user/search/icon"]').addClass('fa-search').removeClass('fa-spinner fa-spin');
 		});
 	}
 
@@ -126,23 +133,6 @@ define('forum/users', ['translator', 'benchpress'], function (translator, Benchp
 
 	function getActiveSection() {
 		return utils.params().section || '';
-	}
-
-	function handleInvite() {
-		$('[component="user/invite"]').on('click', function () {
-			bootbox.prompt('Email: ', function (email) {
-				if (!email) {
-					return;
-				}
-
-				socket.emit('user.invite', email, function (err) {
-					if (err) {
-						return app.alertError(err.message);
-					}
-					app.alertSuccess('[[users:invitation-email-sent, ' + email + ']]');
-				});
-			});
-		});
 	}
 
 	return Users;

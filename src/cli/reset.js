@@ -1,65 +1,62 @@
 'use strict';
 
 require('colors');
-var path = require('path');
-var winston = require('winston');
-var async = require('async');
-var fs = require('fs');
+const path = require('path');
+const winston = require('winston');
+const fs = require('fs');
 
-var db = require('../database');
-var events = require('../events');
-var meta = require('../meta');
-var plugins = require('../plugins');
-var widgets = require('../widgets');
+const db = require('../database');
+const events = require('../events');
+const meta = require('../meta');
+const plugins = require('../plugins');
+const widgets = require('../widgets');
+const privileges = require('../privileges');
+const { paths, pluginNamePattern, themeNamePattern } = require('../constants');
 
-var dirname = require('./paths').baseDir;
-
-var themeNamePattern = /^(@.*?\/)?nodebb-theme-.*$/;
-var pluginNamePattern = /^(@.*?\/)?nodebb-(theme|plugin|widget|rewards)-.*$/;
-
-exports.reset = function (options, callback) {
-	var map = {
-		theme: function (next) {
-			var themeId = options.theme;
+exports.reset = async function (options) {
+	const map = {
+		theme: async function () {
+			let themeId = options.theme;
 			if (themeId === true) {
-				resetThemes(next);
+				await resetThemes();
 			} else {
 				if (!themeNamePattern.test(themeId)) {
 					// Allow omission of `nodebb-theme-`
-					themeId = 'nodebb-theme-' + themeId;
+					themeId = `nodebb-theme-${themeId}`;
 				}
 
-				resetTheme(themeId, next);
+				await resetTheme(themeId);
 			}
 		},
-		plugin: function (next) {
-			var pluginId = options.plugin;
+		plugin: async function () {
+			let pluginId = options.plugin;
 			if (pluginId === true) {
-				resetPlugins(next);
+				await resetPlugins();
 			} else {
 				if (!pluginNamePattern.test(pluginId)) {
 					// Allow omission of `nodebb-plugin-`
-					pluginId = 'nodebb-plugin-' + pluginId;
+					pluginId = `nodebb-plugin-${pluginId}`;
 				}
 
-				resetPlugin(pluginId, next);
+				await resetPlugin(pluginId);
 			}
 		},
 		widgets: resetWidgets,
 		settings: resetSettings,
-		all: function (next) {
-			async.series([resetWidgets, resetThemes, resetPlugins, resetSettings], next);
+		all: async function () {
+			await resetWidgets();
+			await resetThemes();
+			await resetPlugin();
+			await resetSettings();
 		},
 	};
 
-	var tasks = Object.keys(map)
-		.filter(function (x) { return options[x]; })
-		.map(function (x) { return map[x]; });
+	const tasks = Object.keys(map).filter(x => options[x]).map(x => map[x]);
 
 	if (!tasks.length) {
 		console.log([
 			'No arguments passed in, so nothing was reset.\n'.yellow,
-			'Use ./nodebb reset ' + '{-t|-p|-w|-s|-a}'.red,
+			`Use ./nodebb reset ${'{-t|-p|-w|-s|-a}'.red}`,
 			'    -t\tthemes',
 			'    -p\tplugins',
 			'    -w\twidgets',
@@ -74,105 +71,80 @@ exports.reset = function (options, callback) {
 		process.exit(0);
 	}
 
-	async.series([db.init].concat(tasks), function (err) {
-		if (err) {
-			winston.error('[reset] Errors were encountered during reset', err);
-			throw err;
+	try {
+		await db.init();
+		for (const task of tasks) {
+			/* eslint-disable no-await-in-loop */
+			await task();
 		}
-
-		winston.info('[reset] Reset complete');
-		callback();
-	});
+		winston.info('[reset] Reset complete. Please run `./nodebb build` to rebuild assets.');
+		process.exit(0);
+	} catch (err) {
+		winston.error(`[reset] Errors were encountered during reset -- ${err.message}`);
+		process.exit(1);
+	}
 };
 
-function resetSettings(callback) {
-	meta.configs.set('allowLocalLogin', 1, function (err) {
-		winston.info('[reset] Settings reset to default');
-		callback(err);
-	});
+async function resetSettings() {
+	await privileges.global.give(['groups:local:login'], 'registered-users');
+	winston.info('[reset] registered-users given login privilege');
+	winston.info('[reset] Settings reset to default');
 }
 
-function resetTheme(themeId, callback) {
-	fs.access(path.join(dirname, 'node_modules', themeId, 'package.json'), function (err) {
-		if (err) {
-			winston.warn('[reset] Theme `%s` is not installed on this forum', themeId);
-			callback(new Error('theme-not-found'));
-		} else {
-			meta.themes.set({
-				type: 'local',
-				id: themeId,
-			}, function (err) {
-				if (err) {
-					winston.warn('[reset] Failed to reset theme to ' + themeId);
-				} else {
-					winston.info('[reset] Theme reset to ' + themeId);
-				}
-
-				callback();
-			});
-		}
-	});
+async function resetTheme(themeId) {
+	try {
+		await fs.promises.access(path.join(paths.nodeModules, themeId, 'package.json'));
+	} catch (err) {
+		winston.warn('[reset] Theme `%s` is not installed on this forum', themeId);
+		throw new Error('theme-not-found');
+	}
+	await resetThemeTo(themeId);
 }
 
-function resetThemes(callback) {
-	meta.themes.set({
+async function resetThemes() {
+	await resetThemeTo('nodebb-theme-persona');
+}
+
+async function resetThemeTo(themeId) {
+	await meta.themes.set({
 		type: 'local',
-		id: 'nodebb-theme-persona',
-	}, function (err) {
-		winston.info('[reset] Theme reset to Persona');
-		callback(err);
+		id: themeId,
 	});
+	await meta.configs.set('bootswatchSkin', '');
+	winston.info(`[reset] Theme reset to ${themeId} and default skin`);
 }
 
-function resetPlugin(pluginId, callback) {
-	var active = false;
+async function resetPlugin(pluginId) {
+	try {
+		const isActive = await db.isSortedSetMember('plugins:active', pluginId);
+		if (isActive) {
+			await db.sortedSetRemove('plugins:active', pluginId);
+		}
 
-	async.waterfall([
-		async.apply(db.isSortedSetMember, 'plugins:active', pluginId),
-		function (isMember, next) {
-			active = isMember;
+		await events.log({
+			type: 'plugin-deactivate',
+			text: pluginId,
+		});
 
-			if (isMember) {
-				db.sortedSetRemove('plugins:active', pluginId, next);
-			} else {
-				next();
-			}
-		},
-		function (next) {
-			events.log({
-				type: 'plugin-deactivate',
-				text: pluginId,
-			}, next);
-		},
-	], function (err) {
-		if (err) {
-			winston.error('[reset] Could not disable plugin: %s encountered error %s', pluginId, err);
-		} else if (active) {
+		if (isActive) {
 			winston.info('[reset] Plugin `%s` disabled', pluginId);
 		} else {
 			winston.warn('[reset] Plugin `%s` was not active on this forum', pluginId);
 			winston.info('[reset] No action taken.');
-			err = new Error('plugin-not-active');
 		}
-
-		callback(err);
-	});
+	} catch (err) {
+		winston.error(`[reset] Could not disable plugin: ${pluginId} encountered error %s\n${err.stack}`);
+		throw err;
+	}
 }
 
-function resetPlugins(callback) {
-	db.delete('plugins:active', function (err) {
-		winston.info('[reset] All Plugins De-activated');
-		callback(err);
-	});
+async function resetPlugins() {
+	await db.delete('plugins:active');
+	winston.info('[reset] All Plugins De-activated');
 }
 
-function resetWidgets(callback) {
-	async.waterfall([
-		plugins.reload,
-		widgets.reset,
-		function (next) {
-			winston.info('[reset] All Widgets moved to Draft Zone');
-			next();
-		},
-	], callback);
+async function resetWidgets() {
+	await plugins.reload();
+	await widgets.reset();
+	winston.info('[reset] All Widgets moved to Draft Zone');
 }

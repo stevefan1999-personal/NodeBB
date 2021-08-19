@@ -1,245 +1,191 @@
 
 'use strict';
 
-var async = require('async');
-var _ = require('lodash');
+const _ = require('lodash');
 
-var meta = require('../meta');
-var topics = require('../topics');
-var user = require('../user');
-var helpers = require('./helpers');
-var categories = require('../categories');
-var plugins = require('../plugins');
+const meta = require('../meta');
+const topics = require('../topics');
+const user = require('../user');
+const helpers = require('./helpers');
+const categories = require('../categories');
+const plugins = require('../plugins');
+const privsCategories = require('./categories');
 
-module.exports = function (privileges) {
-	privileges.topics = {};
+const privsTopics = module.exports;
 
-	privileges.topics.get = function (tid, uid, callback) {
-		var topic;
-		var privs = ['topics:reply', 'topics:read', 'topics:tag', 'topics:delete', 'posts:edit', 'posts:history', 'posts:delete', 'posts:view_deleted', 'read'];
-		async.waterfall([
-			async.apply(topics.getTopicFields, tid, ['cid', 'uid', 'locked', 'deleted']),
-			function (_topic, next) {
-				topic = _topic;
-				async.parallel({
-					privileges: async.apply(helpers.isUserAllowedTo, privs, uid, topic.cid),
-					isAdministrator: async.apply(user.isAdministrator, uid),
-					isModerator: async.apply(user.isModerator, uid, topic.cid),
-					disabled: async.apply(categories.getCategoryField, topic.cid, 'disabled'),
-				}, next);
-			},
-			function (results, next) {
-				var privData = _.zipObject(privs, results.privileges);
-				var disabled = parseInt(results.disabled, 10) === 1;
-				var locked = parseInt(topic.locked, 10) === 1;
-				var deleted = parseInt(topic.deleted, 10) === 1;
-				var isOwner = !!parseInt(uid, 10) && parseInt(uid, 10) === parseInt(topic.uid, 10);
-				var isAdminOrMod = results.isAdministrator || results.isModerator;
-				var editable = isAdminOrMod;
-				var deletable = isAdminOrMod || (isOwner && privData['topics:delete']);
+privsTopics.get = async function (tid, uid) {
+	uid = parseInt(uid, 10);
 
-				plugins.fireHook('filter:privileges.topics.get', {
-					'topics:reply': (privData['topics:reply'] && !locked && !deleted) || isAdminOrMod,
-					'topics:read': privData['topics:read'] || isAdminOrMod,
-					'topics:tag': privData['topics:tag'] || isAdminOrMod,
-					'topics:delete': (isOwner && privData['topics:delete']) || isAdminOrMod,
-					'posts:edit': (privData['posts:edit'] && !locked) || isAdminOrMod,
-					'posts:history': privData['posts:history'] || isAdminOrMod,
-					'posts:delete': (privData['posts:delete'] && !locked) || isAdminOrMod,
-					'posts:view_deleted': privData['posts:view_deleted'] || isAdminOrMod,
-					read: privData.read || isAdminOrMod,
-					view_thread_tools: editable || deletable,
-					editable: editable,
-					deletable: deletable,
-					view_deleted: isAdminOrMod || isOwner,
-					isAdminOrMod: isAdminOrMod,
-					disabled: disabled,
-					tid: tid,
-					uid: uid,
-				}, next);
-			},
-		], callback);
-	};
+	const privs = [
+		'topics:reply', 'topics:read', 'topics:schedule', 'topics:tag',
+		'topics:delete', 'posts:edit', 'posts:history',
+		'posts:delete', 'posts:view_deleted', 'read', 'purge',
+	];
+	const topicData = await topics.getTopicFields(tid, ['cid', 'uid', 'locked', 'deleted', 'scheduled']);
+	const [userPrivileges, isAdministrator, isModerator, disabled] = await Promise.all([
+		helpers.isAllowedTo(privs, uid, topicData.cid),
+		user.isAdministrator(uid),
+		user.isModerator(uid, topicData.cid),
+		categories.getCategoryField(topicData.cid, 'disabled'),
+	]);
+	const privData = _.zipObject(privs, userPrivileges);
+	const isOwner = uid > 0 && uid === topicData.uid;
+	const isAdminOrMod = isAdministrator || isModerator;
+	const editable = isAdminOrMod;
+	const deletable = (privData['topics:delete'] && (isOwner || isModerator)) || isAdministrator;
+	const mayReply = privsTopics.canViewDeletedScheduled(topicData, {}, false, privData['topics:schedule']);
 
-	privileges.topics.can = function (privilege, tid, uid, callback) {
-		async.waterfall([
-			function (next) {
-				topics.getTopicField(tid, 'cid', next);
-			},
-			function (cid, next) {
-				privileges.categories.can(privilege, cid, uid, next);
-			},
-		], callback);
-	};
+	return await plugins.hooks.fire('filter:privileges.topics.get', {
+		'topics:reply': (privData['topics:reply'] && ((!topicData.locked && mayReply) || isModerator)) || isAdministrator,
+		'topics:read': privData['topics:read'] || isAdministrator,
+		'topics:tag': privData['topics:tag'] || isAdministrator,
+		'topics:delete': (privData['topics:delete'] && (isOwner || isModerator)) || isAdministrator,
+		'posts:edit': (privData['posts:edit'] && (!topicData.locked || isModerator)) || isAdministrator,
+		'posts:history': privData['posts:history'] || isAdministrator,
+		'posts:delete': (privData['posts:delete'] && (!topicData.locked || isModerator)) || isAdministrator,
+		'posts:view_deleted': privData['posts:view_deleted'] || isAdministrator,
+		read: privData.read || isAdministrator,
+		purge: (privData.purge && (isOwner || isModerator)) || isAdministrator,
 
-	privileges.topics.filterTids = function (privilege, tids, uid, callback) {
-		if (!Array.isArray(tids) || !tids.length) {
-			return callback(null, []);
-		}
-		var cids;
-		var topicsData;
-		async.waterfall([
-			function (next) {
-				topics.getTopicsFields(tids, ['tid', 'cid', 'deleted'], next);
-			},
-			function (_topicsData, next) {
-				topicsData = _topicsData;
-				cids = _.uniq(topicsData.map(function (topic) {
-					return topic.cid;
-				}));
+		view_thread_tools: editable || deletable,
+		editable: editable,
+		deletable: deletable,
+		view_deleted: isAdminOrMod || isOwner || privData['posts:view_deleted'],
+		view_scheduled: privData['topics:schedule'] || isAdministrator,
+		isAdminOrMod: isAdminOrMod,
+		disabled: disabled,
+		tid: tid,
+		uid: uid,
+	});
+};
 
-				privileges.categories.getBase(privilege, cids, uid, next);
-			},
-			function (results, next) {
-				var isModOf = {};
-				cids = cids.filter(function (cid, index) {
-					isModOf[cid] = results.isModerators[index];
-					return !results.categories[index].disabled &&
-						(results.allowedTo[index] || results.isAdmin || results.isModerators[index]);
-				});
+privsTopics.can = async function (privilege, tid, uid) {
+	const cid = await topics.getTopicField(tid, 'cid');
+	return await privsCategories.can(privilege, cid, uid);
+};
 
-				tids = topicsData.filter(function (topic) {
-					return cids.indexOf(topic.cid) !== -1 &&
-						(parseInt(topic.deleted, 10) !== 1 || results.isAdmin || isModOf[topic.cid]);
-				}).map(function (topic) {
-					return topic.tid;
-				});
+privsTopics.filterTids = async function (privilege, tids, uid) {
+	if (!Array.isArray(tids) || !tids.length) {
+		return [];
+	}
 
-				plugins.fireHook('filter:privileges.topics.filter', {
-					privilege: privilege,
-					uid: uid,
-					tids: tids,
-				}, function (err, data) {
-					next(err, data ? data.tids : null);
-				});
-			},
-		], callback);
-	};
+	const topicsData = await topics.getTopicsFields(tids, ['tid', 'cid', 'deleted', 'scheduled']);
+	const cids = _.uniq(topicsData.map(topic => topic.cid));
+	const results = await privsCategories.getBase(privilege, cids, uid);
 
-	privileges.topics.filterUids = function (privilege, tid, uids, callback) {
-		if (!Array.isArray(uids) || !uids.length) {
-			return callback(null, []);
-		}
+	const allowedCids = cids.filter((cid, index) => (
+		!results.categories[index].disabled &&
+		(results.allowedTo[index] || results.isAdmin)
+	));
 
-		uids = _.uniq(uids);
-		var topicData;
-		async.waterfall([
-			function (next) {
-				topics.getTopicFields(tid, ['tid', 'cid', 'deleted'], next);
-			},
-			function (_topicData, next) {
-				topicData = _topicData;
-				async.parallel({
-					disabled: function (next) {
-						categories.getCategoryField(topicData.cid, 'disabled', next);
-					},
-					allowedTo: function (next) {
-						helpers.isUsersAllowedTo(privilege, uids, topicData.cid, next);
-					},
-					isModerators: function (next) {
-						user.isModerator(uids, topicData.cid, next);
-					},
-					isAdmins: function (next) {
-						user.isAdministrator(uids, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				uids = uids.filter(function (uid, index) {
-					return parseInt(results.disabled, 10) !== 1 &&
-						((results.allowedTo[index] && parseInt(topicData.deleted, 10) !== 1) || results.isAdmins[index] || results.isModerators[index]);
-				});
+	const cidsSet = new Set(allowedCids);
+	const canViewDeleted = _.zipObject(cids, results.view_deleted);
+	const canViewScheduled = _.zipObject(cids, results.view_scheduled);
 
-				next(null, uids);
-			},
-		], callback);
-	};
+	tids = topicsData.filter(t => (
+		cidsSet.has(t.cid) &&
+		(results.isAdmin || privsTopics.canViewDeletedScheduled(t, {}, canViewDeleted[t.cid], canViewScheduled[t.cid]))
+	)).map(t => t.tid);
 
-	privileges.topics.canPurge = function (tid, uid, callback) {
-		async.waterfall([
-			function (next) {
-				topics.getTopicField(tid, 'cid', next);
-			},
-			function (cid, next) {
-				async.parallel({
-					purge: async.apply(privileges.categories.isUserAllowedTo, 'purge', cid, uid),
-					owner: async.apply(topics.isOwner, tid, uid),
-					isAdminOrMod: async.apply(privileges.categories.isAdminOrMod, cid, uid),
-				}, next);
-			},
-			function (results, next) {
-				next(null, results.isAdminOrMod || (results.purge && results.owner));
-			},
-		], callback);
-	};
+	const data = await plugins.hooks.fire('filter:privileges.topics.filter', {
+		privilege: privilege,
+		uid: uid,
+		tids: tids,
+	});
+	return data ? data.tids : [];
+};
 
-	privileges.topics.canDelete = function (tid, uid, callback) {
-		var topicData;
-		async.waterfall([
-			function (next) {
-				topics.getTopicFields(tid, ['cid', 'postcount'], next);
-			},
-			function (_topicData, next) {
-				topicData = _topicData;
-				async.parallel({
-					isModerator: async.apply(user.isModerator, uid, topicData.cid),
-					isAdministrator: async.apply(user.isAdministrator, uid),
-					isOwner: async.apply(topics.isOwner, tid, uid),
-					'topics:delete': async.apply(helpers.isUserAllowedTo, 'topics:delete', uid, [topicData.cid]),
-				}, next);
-			},
-			function (results, next) {
-				if (results.isModerator || results.isAdministrator) {
-					return next(null, true);
-				}
+privsTopics.filterUids = async function (privilege, tid, uids) {
+	if (!Array.isArray(uids) || !uids.length) {
+		return [];
+	}
 
-				var preventTopicDeleteAfterReplies = parseInt(meta.config.preventTopicDeleteAfterReplies, 10) || 0;
-				if (preventTopicDeleteAfterReplies && (topicData.postcount - 1) >= preventTopicDeleteAfterReplies) {
-					var langKey = preventTopicDeleteAfterReplies > 1 ?
-						'[[error:cant-delete-topic-has-replies, ' + meta.config.preventTopicDeleteAfterReplies + ']]' :
-						'[[error:cant-delete-topic-has-reply]]';
-					return next(new Error(langKey));
-				}
+	uids = _.uniq(uids);
+	const topicData = await topics.getTopicFields(tid, ['tid', 'cid', 'deleted', 'scheduled']);
+	const [disabled, allowedTo, isAdmins] = await Promise.all([
+		categories.getCategoryField(topicData.cid, 'disabled'),
+		helpers.isUsersAllowedTo(privilege, uids, topicData.cid),
+		user.isAdministrator(uids),
+	]);
 
-				if (!results['topics:delete'][0]) {
-					return next(null, false);
-				}
+	if (topicData.scheduled) {
+		const canViewScheduled = await helpers.isUsersAllowedTo('topics:schedule', uids, topicData.cid);
+		uids = uids.filter((uid, index) => canViewScheduled[index]);
+	}
 
-				next(null, results.isOwner);
-			},
-		], callback);
-	};
+	return uids.filter((uid, index) => !disabled &&
+			((allowedTo[index] && (topicData.scheduled || !topicData.deleted)) || isAdmins[index]));
+};
 
-	privileges.topics.canEdit = function (tid, uid, callback) {
-		privileges.topics.isOwnerOrAdminOrMod(tid, uid, callback);
-	};
+privsTopics.canPurge = async function (tid, uid) {
+	const cid = await topics.getTopicField(tid, 'cid');
+	const [purge, owner, isAdmin, isModerator] = await Promise.all([
+		privsCategories.isUserAllowedTo('purge', cid, uid),
+		topics.isOwner(tid, uid),
+		user.isAdministrator(uid),
+		user.isModerator(uid, cid),
+	]);
+	return (purge && (owner || isModerator)) || isAdmin;
+};
 
-	privileges.topics.isOwnerOrAdminOrMod = function (tid, uid, callback) {
-		helpers.some([
-			function (next) {
-				topics.isOwner(tid, uid, next);
-			},
-			function (next) {
-				privileges.topics.isAdminOrMod(tid, uid, next);
-			},
-		], callback);
-	};
+privsTopics.canDelete = async function (tid, uid) {
+	const topicData = await topics.getTopicFields(tid, ['uid', 'cid', 'postcount', 'deleterUid']);
+	const [isModerator, isAdministrator, isOwner, allowedTo] = await Promise.all([
+		user.isModerator(uid, topicData.cid),
+		user.isAdministrator(uid),
+		topics.isOwner(tid, uid),
+		helpers.isAllowedTo('topics:delete', uid, [topicData.cid]),
+	]);
 
-	privileges.topics.isAdminOrMod = function (tid, uid, callback) {
-		helpers.some([
-			function (next) {
-				async.waterfall([
-					function (next) {
-						topics.getTopicField(tid, 'cid', next);
-					},
-					function (cid, next) {
-						user.isModerator(uid, cid, next);
-					},
-				], next);
-			},
-			function (next) {
-				user.isAdministrator(uid, next);
-			},
-		], callback);
-	};
+	if (isAdministrator) {
+		return true;
+	}
+
+	const { preventTopicDeleteAfterReplies } = meta.config;
+	if (!isModerator && preventTopicDeleteAfterReplies && (topicData.postcount - 1) >= preventTopicDeleteAfterReplies) {
+		const langKey = preventTopicDeleteAfterReplies > 1 ?
+			`[[error:cant-delete-topic-has-replies, ${meta.config.preventTopicDeleteAfterReplies}]]` :
+			'[[error:cant-delete-topic-has-reply]]';
+		throw new Error(langKey);
+	}
+
+	const { deleterUid } = topicData;
+	return allowedTo[0] && ((isOwner && (deleterUid === 0 || deleterUid === topicData.uid)) || isModerator);
+};
+
+privsTopics.canEdit = async function (tid, uid) {
+	return await privsTopics.isOwnerOrAdminOrMod(tid, uid);
+};
+
+privsTopics.isOwnerOrAdminOrMod = async function (tid, uid) {
+	const [isOwner, isAdminOrMod] = await Promise.all([
+		topics.isOwner(tid, uid),
+		privsTopics.isAdminOrMod(tid, uid),
+	]);
+	return isOwner || isAdminOrMod;
+};
+
+privsTopics.isAdminOrMod = async function (tid, uid) {
+	if (parseInt(uid, 10) <= 0) {
+		return false;
+	}
+	const cid = await topics.getTopicField(tid, 'cid');
+	return await privsCategories.isAdminOrMod(cid, uid);
+};
+
+privsTopics.canViewDeletedScheduled = function (topic, privileges = {}, viewDeleted = false, viewScheduled = false) {
+	if (!topic) {
+		return false;
+	}
+	const { deleted = false, scheduled = false } = topic;
+	const { view_deleted = viewDeleted, view_scheduled = viewScheduled } = privileges;
+
+	// conceptually exclusive, scheduled topics deemed to be not deleted (they can only be purged)
+	if (scheduled) {
+		return view_scheduled;
+	} else if (deleted) {
+		return view_deleted;
+	}
+
+	return true;
 };

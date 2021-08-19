@@ -1,233 +1,155 @@
 'use strict';
 
-var async = require('async');
+const winston = require('winston');
 
-var user = require('../../user');
-var meta = require('../../meta');
-var events = require('../../events');
-var privileges = require('../../privileges');
+const api = require('../../api');
+const user = require('../../user');
+const events = require('../../events');
+const notifications = require('../../notifications');
+const db = require('../../database');
+const plugins = require('../../plugins');
+const sockets = require('..');
 
 module.exports = function (SocketUser) {
-	SocketUser.changeUsernameEmail = function (socket, data, callback) {
+	SocketUser.changeUsernameEmail = async function (socket, data) {
+		sockets.warnDeprecated(socket, 'PUT /api/v3/users/:uid');
+
 		if (!data || !data.uid || !socket.uid) {
-			return callback(new Error('[[error:invalid-data]]'));
+			throw new Error('[[error:invalid-data]]');
 		}
-
-		async.waterfall([
-			function (next) {
-				isPrivilegedOrSelfAndPasswordMatch(socket, data, next);
-			},
-			function (next) {
-				SocketUser.updateProfile(socket, data, next);
-			},
-		], callback);
+		await isPrivilegedOrSelfAndPasswordMatch(socket, data);
+		return await SocketUser.updateProfile(socket, data);
 	};
 
-	SocketUser.updateCover = function (socket, data, callback) {
+	SocketUser.updateCover = async function (socket, data) {
 		if (!socket.uid) {
-			return callback(new Error('[[error:no-privileges]]'));
+			throw new Error('[[error:no-privileges]]');
 		}
-		async.waterfall([
-			function (next) {
-				user.isAdminOrGlobalModOrSelf(socket.uid, data.uid, next);
-			},
-			function (next) {
-				user.checkMinReputation(socket.uid, data.uid, 'min:rep:cover-picture', next);
-			},
-			function (next) {
-				user.updateCoverPicture(data, next);
-			},
-		], callback);
+		await user.isAdminOrGlobalModOrSelf(socket.uid, data.uid);
+		await user.checkMinReputation(socket.uid, data.uid, 'min:rep:cover-picture');
+		return await user.updateCoverPicture(data);
 	};
 
-	SocketUser.uploadCroppedPicture = function (socket, data, callback) {
+	SocketUser.uploadCroppedPicture = async function (socket, data) {
 		if (!socket.uid) {
-			return callback(new Error('[[error:no-privileges]]'));
+			throw new Error('[[error:no-privileges]]');
 		}
-		async.waterfall([
-			function (next) {
-				user.isAdminOrGlobalModOrSelf(socket.uid, data.uid, next);
-			},
-			function (next) {
-				user.checkMinReputation(socket.uid, data.uid, 'min:rep:profile-picture', next);
-			},
-			function (next) {
-				user.uploadCroppedPicture(data, next);
-			},
-		], callback);
+		await user.isAdminOrGlobalModOrSelf(socket.uid, data.uid);
+		await user.checkMinReputation(socket.uid, data.uid, 'min:rep:profile-picture');
+		data.callerUid = socket.uid;
+		return await user.uploadCroppedPicture(data);
 	};
 
-	SocketUser.removeCover = function (socket, data, callback) {
+	SocketUser.removeCover = async function (socket, data) {
 		if (!socket.uid) {
-			return callback(new Error('[[error:no-privileges]]'));
+			throw new Error('[[error:no-privileges]]');
 		}
-
-		async.waterfall([
-			function (next) {
-				user.isAdminOrGlobalModOrSelf(socket.uid, data.uid, next);
-			},
-			function (next) {
-				user.removeCoverPicture(data, next);
-			},
-		], callback);
-	};
-
-	function isPrivilegedOrSelfAndPasswordMatch(socket, data, callback) {
-		const uid = socket.uid;
-		const isSelf = parseInt(uid, 10) === parseInt(data.uid, 10);
-
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					isAdmin: async.apply(user.isAdministrator, uid),
-					isTargetAdmin: async.apply(user.isAdministrator, data.uid),
-					isGlobalMod: async.apply(user.isGlobalModerator, uid),
-				}, next);
-			},
-			function (results, next) {
-				if (results.isTargetAdmin && !results.isAdmin) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-
-				if (!isSelf && !(results.isAdmin || results.isGlobalMod)) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-
-				async.parallel({
-					hasPassword: async.apply(user.hasPassword, data.uid),
-					passwordMatch: function (next) {
-						if (data.password) {
-							user.isPasswordCorrect(data.uid, data.password, socket.ip, next);
-						} else {
-							next(null, false);
-						}
-					},
-				}, next);
-			}, function (results, next) {
-				if (isSelf && results.hasPassword && !results.passwordMatch) {
-					return next(new Error('[[error:invalid-password]]'));
-				}
-
-				next();
-			},
-		], callback);
-	}
-
-	SocketUser.changePassword = function (socket, data, callback) {
-		if (!socket.uid) {
-			return callback(new Error('[[error:invalid-uid]]'));
-		}
-
-		if (!data || !data.uid) {
-			return callback(new Error('[[error:invalid-data]]'));
-		}
-		async.waterfall([
-			function (next) {
-				user.changePassword(socket.uid, Object.assign(data, { ip: socket.ip }), next);
-			},
-			function (next) {
-				events.log({
-					type: 'password-change',
-					uid: socket.uid,
-					targetUid: data.uid,
-					ip: socket.ip,
-				});
-				next();
-			},
-		], callback);
-	};
-
-	SocketUser.updateProfile = function (socket, data, callback) {
-		if (!socket.uid) {
-			return callback(new Error('[[error:invalid-uid]]'));
-		}
-
-		if (!data || !data.uid) {
-			return callback(new Error('[[error:invalid-data]]'));
-		}
-
-		var oldUserData;
-		async.waterfall([
-			function (next) {
-				user.getUserFields(data.uid, ['email', 'username'], next);
-			},
-			function (_oldUserData, next) {
-				oldUserData = _oldUserData;
-				if (!oldUserData || !oldUserData.username) {
-					return next(new Error('[[error:invalid-data]]'));
-				}
-
-				async.parallel({
-					isAdminOrGlobalMod: function (next) {
-						user.isAdminOrGlobalMod(socket.uid, next);
-					},
-					canEdit: function (next) {
-						privileges.users.canEdit(socket.uid, data.uid, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				if (!results.canEdit) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-
-				if (!results.isAdminOrGlobalMod && parseInt(meta.config['username:disableEdit'], 10) === 1) {
-					data.username = oldUserData.username;
-				}
-
-				if (!results.isAdminOrGlobalMod && parseInt(meta.config['email:disableEdit'], 10) === 1) {
-					data.email = oldUserData.email;
-				}
-
-				user.updateProfile(socket.uid, data, next);
-			},
-			function (userData, next) {
-				function log(type, eventData) {
-					eventData.type = type;
-					eventData.uid = socket.uid;
-					eventData.targetUid = data.uid;
-					eventData.ip = socket.ip;
-
-					events.log(eventData);
-				}
-
-				if (userData.email !== oldUserData.email) {
-					log('email-change', { oldEmail: oldUserData.email, newEmail: userData.email });
-				}
-
-				if (userData.username !== oldUserData.username) {
-					log('username-change', { oldUsername: oldUserData.username, newUsername: userData.username });
-				}
-
-				next(null, userData);
-			},
-		], callback);
-	};
-
-	SocketUser.toggleBlock = function (socket, data, callback) {
-		let isBlocked;
-
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					can: function (next) {
-						user.blocks.can(socket.uid, data.blockerUid, data.blockeeUid, next);
-					},
-					is: function (next) {
-						user.blocks.is(data.blockeeUid, data.blockerUid, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				isBlocked = results.is;
-				if (!results.can && !isBlocked) {
-					return next(new Error('[[error:cannot-block-privileged]]'));
-				}
-
-				user.blocks[isBlocked ? 'remove' : 'add'](data.blockeeUid, data.blockerUid, next);
-			},
-		], function (err) {
-			callback(err, !isBlocked);
+		await user.isAdminOrGlobalModOrSelf(socket.uid, data.uid);
+		const userData = await user.getUserFields(data.uid, ['cover:url']);
+		// 'keepAllUserImages' is ignored, since there is explicit user intent
+		await user.removeCoverPicture(data);
+		plugins.hooks.fire('action:user.removeCoverPicture', {
+			callerUid: socket.uid,
+			uid: data.uid,
+			user: userData,
 		});
 	};
+
+	async function isPrivilegedOrSelfAndPasswordMatch(socket, data) {
+		const { uid } = socket;
+		const isSelf = parseInt(uid, 10) === parseInt(data.uid, 10);
+
+		const [isAdmin, isTargetAdmin, isGlobalMod] = await Promise.all([
+			user.isAdministrator(uid),
+			user.isAdministrator(data.uid),
+			user.isGlobalModerator(uid),
+		]);
+
+		if ((isTargetAdmin && !isAdmin) || (!isSelf && !(isAdmin || isGlobalMod))) {
+			throw new Error('[[error:no-privileges]]');
+		}
+		const [hasPassword, passwordMatch] = await Promise.all([
+			user.hasPassword(data.uid),
+			data.password ? user.isPasswordCorrect(data.uid, data.password, socket.ip) : false,
+		]);
+
+		if (isSelf && hasPassword && !passwordMatch) {
+			throw new Error('[[error:invalid-password]]');
+		}
+	}
+
+	SocketUser.changePassword = async function (socket, data) {
+		sockets.warnDeprecated(socket, 'PUT /api/v3/users/:uid/password');
+		await api.users.changePassword(socket, data);
+	};
+
+	SocketUser.updateProfile = async function (socket, data) {
+		sockets.warnDeprecated(socket, 'PUT /api/v3/users/:uid');
+		return await api.users.update(socket, data);
+	};
+
+	SocketUser.toggleBlock = async function (socket, data) {
+		const [is] = await Promise.all([
+			user.blocks.is(data.blockeeUid, data.blockerUid),
+			user.blocks.can(socket.uid, data.blockerUid, data.blockeeUid),
+		]);
+		const isBlocked = is;
+		await user.blocks[isBlocked ? 'remove' : 'add'](data.blockeeUid, data.blockerUid);
+		return !isBlocked;
+	};
+
+	SocketUser.exportProfile = async function (socket, data) {
+		await doExport(socket, data, 'profile');
+	};
+
+	SocketUser.exportPosts = async function (socket, data) {
+		await doExport(socket, data, 'posts');
+	};
+
+	SocketUser.exportUploads = async function (socket, data) {
+		await doExport(socket, data, 'uploads');
+	};
+
+	async function doExport(socket, data, type) {
+		if (!socket.uid) {
+			throw new Error('[[error:invalid-uid]]');
+		}
+
+		if (!data || parseInt(data.uid, 10) <= 0) {
+			throw new Error('[[error:invalid-data]]');
+		}
+
+		await user.isAdminOrSelf(socket.uid, data.uid);
+
+		const count = await db.incrObjectField('locks', `export:${data.uid}${type}`);
+		if (count > 1) {
+			throw new Error('[[error:already-exporting]]');
+		}
+
+		const child = require('child_process').fork(`./src/user/jobs/export-${type}.js`, [], {
+			env: process.env,
+		});
+		child.send({ uid: data.uid });
+		child.on('error', async (err) => {
+			winston.error(err.stack);
+			await db.deleteObjectField('locks', `export:${data.uid}${type}`);
+		});
+		child.on('exit', async () => {
+			await db.deleteObjectField('locks', `export:${data.uid}${type}`);
+			const userData = await user.getUserFields(data.uid, ['username', 'userslug']);
+			const n = await notifications.create({
+				bodyShort: `[[notifications:${type}-exported, ${userData.username}]]`,
+				path: `/api/user/uid/${userData.userslug}/export/${type}`,
+				nid: `${type}:export:${data.uid}`,
+				from: data.uid,
+			});
+			await notifications.push(n, [socket.uid]);
+			await events.log({
+				type: `export:${type}`,
+				uid: socket.uid,
+				targetUid: data.uid,
+				ip: socket.ip,
+			});
+		});
+	}
 };

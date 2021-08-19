@@ -1,232 +1,198 @@
 'use strict';
 
-var async = require('async');
-var db = require('../database');
-var utils = require('../utils');
-var validator = require('validator');
-var plugins = require('../plugins');
-var groups = require('../groups');
-var meta = require('../meta');
+const zxcvbn = require('zxcvbn');
+const winston = require('winston');
 
-var zxcvbn = require('zxcvbn');
+const db = require('../database');
+const utils = require('../utils');
+const slugify = require('../slugify');
+const plugins = require('../plugins');
+const groups = require('../groups');
+const meta = require('../meta');
+const analytics = require('../analytics');
 
 module.exports = function (User) {
-	User.create = function (data, callback) {
+	User.create = async function (data) {
 		data.username = data.username.trim();
-		data.userslug = utils.slugify(data.username);
+		data.userslug = slugify(data.username);
 		if (data.email !== undefined) {
-			data.email = validator.escape(String(data.email).trim());
+			data.email = String(data.email).trim();
 		}
-		var timestamp = data.timestamp || Date.now();
-		var userData;
-		var userNameChanged = false;
 
-		async.waterfall([
-			function (next) {
-				User.isDataValid(data, next);
-			},
-			function (next) {
-				userData = {
-					username: data.username,
-					userslug: data.userslug,
-					email: data.email || '',
-					joindate: timestamp,
-					lastonline: timestamp,
-					picture: data.picture || '',
-					fullname: data.fullname || '',
-					location: data.location || '',
-					birthday: data.birthday || '',
-					website: '',
-					signature: '',
-					uploadedpicture: '',
-					profileviews: 0,
-					reputation: 0,
-					postcount: 0,
-					topiccount: 0,
-					lastposttime: 0,
-					banned: 0,
-					status: 'online',
-					gdpr_consent: data.gdpr_consent === true ? 1 : 0,
-					acceptTos: data.acceptTos === true ? 1 : 0,
-				};
+		await User.isDataValid(data);
 
-				User.uniqueUsername(userData, next);
-			},
-			function (renamedUsername, next) {
-				userNameChanged = !!renamedUsername;
+		await lock(data.username, '[[error:username-taken]]');
+		if (data.email && data.email !== data.username) {
+			await lock(data.email, '[[error:email-taken]]');
+		}
 
-				if (userNameChanged) {
-					userData.username = renamedUsername;
-					userData.userslug = utils.slugify(renamedUsername);
-				}
-				plugins.fireHook('filter:user.create', { user: userData, data: data }, next);
-			},
-			function (results, next) {
-				userData = results.user;
-				db.incrObjectField('global', 'nextUid', next);
-			},
-			function (uid, next) {
-				userData.uid = uid;
-				db.setObject('user:' + uid, userData, next);
-			},
-			function (next) {
-				async.parallel([
-					function (next) {
-						db.incrObjectField('global', 'userCount', next);
-					},
-					function (next) {
-						db.sortedSetAdd('username:uid', userData.uid, userData.username, next);
-					},
-					function (next) {
-						db.sortedSetAdd('username:sorted', 0, userData.username.toLowerCase() + ':' + userData.uid, next);
-					},
-					function (next) {
-						db.sortedSetAdd('userslug:uid', userData.uid, userData.userslug, next);
-					},
-					function (next) {
-						var sets = ['users:joindate', 'users:online'];
-						if (parseInt(userData.uid, 10) !== 1) {
-							sets.push('users:notvalidated');
-						}
-						db.sortedSetsAdd(sets, timestamp, userData.uid, next);
-					},
-					function (next) {
-						db.sortedSetsAdd(['users:postcount', 'users:reputation'], 0, userData.uid, next);
-					},
-					function (next) {
-						groups.join('registered-users', userData.uid, next);
-					},
-					function (next) {
-						User.notifications.sendWelcomeNotification(userData.uid, next);
-					},
-					function (next) {
-						if (userData.email) {
-							async.parallel([
-								async.apply(db.sortedSetAdd, 'email:uid', userData.uid, userData.email.toLowerCase()),
-								async.apply(db.sortedSetAdd, 'email:sorted', 0, userData.email.toLowerCase() + ':' + userData.uid),
-							], next);
-
-							if (parseInt(userData.uid, 10) !== 1 && parseInt(meta.config.requireEmailConfirmation, 10) === 1) {
-								User.email.sendValidationEmail(userData.uid, {
-									email: userData.email,
-								});
-							}
-						} else {
-							next();
-						}
-					},
-					function (next) {
-						if (!data.password) {
-							return next();
-						}
-
-						User.hashPassword(data.password, function (err, hash) {
-							if (err) {
-								return next(err);
-							}
-
-							async.parallel([
-								async.apply(User.setUserField, userData.uid, 'password', hash),
-								async.apply(User.reset.updateExpiry, userData.uid),
-							], next);
-						});
-					},
-					function (next) {
-						User.updateDigestSetting(userData.uid, meta.config.dailyDigestFreq, next);
-					},
-				], next);
-			},
-			function (results, next) {
-				if (userNameChanged) {
-					User.notifications.sendNameChangeNotification(userData.uid, userData.username);
-				}
-				plugins.fireHook('action:user.create', { user: userData });
-				next(null, userData.uid);
-			},
-		], callback);
+		try {
+			return await create(data);
+		} finally {
+			await db.deleteObjectFields('locks', [data.username, data.email]);
+		}
 	};
 
-	User.isDataValid = function (userData, callback) {
-		async.parallel({
-			emailValid: function (next) {
-				if (userData.email) {
-					next(!utils.isEmailValid(userData.email) ? new Error('[[error:invalid-email]]') : null);
-				} else {
-					next();
-				}
-			},
-			userNameValid: function (next) {
-				next((!utils.isUserNameValid(userData.username) || !userData.userslug) ? new Error('[[error:invalid-username, ' + userData.username + ']]') : null);
-			},
-			passwordValid: function (next) {
-				if (userData.password) {
-					User.isPasswordValid(userData.password, next);
-				} else {
-					next();
-				}
-			},
-			emailAvailable: function (next) {
-				if (userData.email) {
-					User.email.available(userData.email, function (err, available) {
-						if (err) {
-							return next(err);
-						}
-						next(!available ? new Error('[[error:email-taken]]') : null);
-					});
-				} else {
-					next();
-				}
-			},
-		}, function (err) {
-			callback(err);
+	async function lock(value, error) {
+		const count = await db.incrObjectField('locks', value);
+		if (count > 1) {
+			throw new Error(error);
+		}
+	}
+
+	async function create(data) {
+		const timestamp = data.timestamp || Date.now();
+
+		let userData = {
+			username: data.username,
+			userslug: data.userslug,
+			email: data.email || '',
+			joindate: timestamp,
+			lastonline: timestamp,
+			status: 'online',
+		};
+		['picture', 'fullname', 'location', 'birthday'].forEach((field) => {
+			if (data[field]) {
+				userData[field] = data[field];
+			}
 		});
+		if (data.gdpr_consent === true) {
+			userData.gdpr_consent = 1;
+		}
+		if (data.acceptTos === true) {
+			userData.acceptTos = 1;
+		}
+
+		const renamedUsername = await User.uniqueUsername(userData);
+		const userNameChanged = !!renamedUsername;
+		if (userNameChanged) {
+			userData.username = renamedUsername;
+			userData.userslug = slugify(renamedUsername);
+		}
+
+		const results = await plugins.hooks.fire('filter:user.create', { user: userData, data: data });
+		userData = results.user;
+
+		const uid = await db.incrObjectField('global', 'nextUid');
+		const isFirstUser = uid === 1;
+		userData.uid = uid;
+
+		if (isFirstUser) {
+			userData['email:confirmed'] = 1;
+		}
+		await db.setObject(`user:${uid}`, userData);
+
+		const bulkAdd = [
+			['username:uid', userData.uid, userData.username],
+			[`user:${userData.uid}:usernames`, timestamp, `${userData.username}:${timestamp}`],
+			['username:sorted', 0, `${userData.username.toLowerCase()}:${userData.uid}`],
+			['userslug:uid', userData.uid, userData.userslug],
+			['users:joindate', timestamp, userData.uid],
+			['users:online', timestamp, userData.uid],
+			['users:postcount', 0, userData.uid],
+			['users:reputation', 0, userData.uid],
+		];
+
+		if (userData.fullname) {
+			bulkAdd.push(['fullname:sorted', 0, `${userData.fullname.toLowerCase()}:${userData.uid}`]);
+		}
+
+		const groupsToJoin = ['registered-users'].concat(
+			isFirstUser ? 'verified-users' : 'unverified-users'
+		);
+
+		await Promise.all([
+			db.incrObjectField('global', 'userCount'),
+			analytics.increment('registrations'),
+			db.sortedSetAddBulk(bulkAdd),
+			groups.join(groupsToJoin, userData.uid),
+			User.notifications.sendWelcomeNotification(userData.uid),
+			storePassword(userData.uid, data.password),
+			User.updateDigestSetting(userData.uid, meta.config.dailyDigestFreq),
+		]);
+
+		if (userData.email && userData.uid > 1) {
+			User.email.sendValidationEmail(userData.uid, {
+				email: userData.email,
+				template: 'welcome',
+				subject: `[[email:welcome-to, ${meta.config.title || meta.config.browserTitle || 'NodeBB'}]]`,
+			}).catch(err => winston.error(`[user.create] Validation email failed to send\n[emailer.send] ${err.stack}`));
+		}
+		if (userNameChanged) {
+			await User.notifications.sendNameChangeNotification(userData.uid, userData.username);
+		}
+		plugins.hooks.fire('action:user.create', { user: userData, data: data });
+		return userData.uid;
+	}
+
+	async function storePassword(uid, password) {
+		if (!password) {
+			return;
+		}
+		const hash = await User.hashPassword(password);
+		await Promise.all([
+			User.setUserFields(uid, {
+				password: hash,
+				'password:shaWrapped': 1,
+			}),
+			User.reset.updateExpiry(uid),
+		]);
+	}
+
+	User.isDataValid = async function (userData) {
+		if (userData.email && !utils.isEmailValid(userData.email)) {
+			throw new Error('[[error:invalid-email]]');
+		}
+
+		if (!utils.isUserNameValid(userData.username) || !userData.userslug) {
+			throw new Error(`[[error:invalid-username, ${userData.username}]]`);
+		}
+
+		if (userData.password) {
+			User.isPasswordValid(userData.password);
+		}
+
+		if (userData.email) {
+			const available = await User.email.available(userData.email);
+			if (!available) {
+				throw new Error('[[error:email-taken]]');
+			}
+		}
 	};
 
-	User.isPasswordValid = function (password, minStrength, callback) {
-		if (typeof minStrength === 'function' && !callback) {
-			callback = minStrength;
-			minStrength = meta.config.minimumPasswordStrength;
-		}
+	User.isPasswordValid = function (password, minStrength) {
+		minStrength = (minStrength || minStrength === 0) ? minStrength : meta.config.minimumPasswordStrength;
 
 		// Sanity checks: Checks if defined and is string
 		if (!password || !utils.isPasswordValid(password)) {
-			return callback(new Error('[[error:invalid-password]]'));
+			throw new Error('[[error:invalid-password]]');
 		}
 
 		if (password.length < meta.config.minimumPasswordLength) {
-			return callback(new Error('[[reset_password:password_too_short]]'));
+			throw new Error('[[reset_password:password_too_short]]');
 		}
 
 		if (password.length > 512) {
-			return callback(new Error('[[error:password-too-long]]'));
+			throw new Error('[[error:password-too-long]]');
 		}
 
-		var strength = zxcvbn(password);
+		const strength = zxcvbn(password);
 		if (strength.score < minStrength) {
-			return callback(new Error('[[user:weak_password]]'));
+			throw new Error('[[user:weak_password]]');
 		}
-
-		callback();
 	};
 
-	User.uniqueUsername = function (userData, callback) {
-		var numTries = 0;
-		function go(username) {
-			async.waterfall([
-				function (next) {
-					meta.userOrGroupExists(username, next);
-				},
-				function (exists) {
-					if (!exists) {
-						return callback(null, numTries ? username : null);
-					}
-					username = userData.username + ' ' + numTries.toString(32);
-					numTries += 1;
-					go(username);
-				},
-			], callback);
+	User.uniqueUsername = async function (userData) {
+		let numTries = 0;
+		let { username } = userData;
+		while (true) {
+			/* eslint-disable no-await-in-loop */
+			const exists = await meta.userOrGroupExists(username);
+			if (!exists) {
+				return numTries ? username : null;
+			}
+			username = `${userData.username} ${numTries.toString(32)}`;
+			numTries += 1;
 		}
-
-		go(userData.userslug);
 	};
 };

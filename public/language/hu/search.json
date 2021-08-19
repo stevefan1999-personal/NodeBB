@@ -5,9 +5,9 @@
     "in": "Itt:",
     "titles": "Címek",
     "titles-posts": "Címek és hozzászólások",
-    "match-words": "Match words",
-    "all": "All",
-    "any": "Any",
+    "match-words": "Egyező szavak",
+    "all": "Összes",
+    "any": "Bármelyik",
     "posted-by": "Írta",
     "in-categories": "Kategóriában",
     "search-child-categories": "Keresés az alkategóriában is",
@@ -17,6 +17,7 @@
     "at-most": "Legfeljebb",
     "relevance": "Találati pontosság",
     "post-time": "Hozzászólás ideje",
+    "votes": "Szavazatok",
     "newer-than": "Újabb, mint",
     "older-than": "Régebbi, mint",
     "any-date": "Bármikor",
@@ -30,6 +31,7 @@
     "sort-by": "Rendezés",
     "last-reply-time": "Utolsó válasz ideje",
     "topic-title": "Témakör címe",
+    "topic-votes": "Témakör szavazatok",
     "number-of-replies": "Válaszok száma",
     "number-of-views": "Megtekintések száma",
     "topic-start-date": "Témakör indulási napja",
@@ -41,5 +43,7 @@
     "clear-preferences": "Beállítások törlése",
     "search-preferences-saved": "Keresési beállítások mentve",
     "search-preferences-cleared": "Keresési beállítások törölve",
-    "show-results-as": "Megjelenő találatok"
+    "show-results-as": "Megjelenő találatok",
+    "see-more-results": "Több találat megjelenítése (%1)",
+    "search-in-category": "Keresés \"%1\"-ban/ben"
 }

@@ -1,8 +1,10 @@
 'use strict';
 
 
-define('forum/login', [], function () {
-	var	Login = {};
+define('forum/login', ['hooks', 'jquery-form'], function (hooks) {
+	var	Login = {
+		_capsState: false,
+	};
 
 	Login.init = function () {
 		var errorEl = $('#login-error-notify');
@@ -24,21 +26,18 @@ define('forum/login', [], function () {
 
 				submitEl.addClass('disabled');
 
-				/*
-					Set session refresh flag (otherwise the session check will trip and throw invalid session modal)
-					We know the session is/will be invalid (uid mismatch) because the user is attempting a login
-				*/
-				app.flags = app.flags || {};
-				app.flags._sessionRefresh = true;
-
+				hooks.fire('action:app.login');
 				formEl.ajaxSubmit({
 					headers: {
 						'x-csrf-token': config.csrf_token,
 					},
-					success: function (returnTo) {
-						var pathname = utils.urlToLocation(returnTo).pathname;
-
-						var params = utils.params({ url: returnTo });
+					beforeSend: function () {
+						app.flags._login = true;
+					},
+					success: function (data) {
+						hooks.fire('action:app.loggedIn', data);
+						var pathname = utils.urlToLocation(data.next).pathname;
+						var params = utils.params({ url: data.next });
 						params.loggedin = true;
 						var qs = decodeURIComponent($.param(params));
 
@@ -51,7 +50,6 @@ define('forum/login', [], function () {
 							errorEl.find('p').translateText(data.responseText);
 							errorEl.show();
 							submitEl.removeClass('disabled');
-							app.flags._sessionRefresh = false;
 
 							// Select the entire password if that field has focus
 							if ($('#password:focus').length) {
@@ -63,18 +61,44 @@ define('forum/login', [], function () {
 			}
 		});
 
+		// Guard against caps lock
+		Login.capsLockCheck(document.querySelector('#password'), document.querySelector('#caps-lock-warning'));
+
 		$('#login-error-notify button').on('click', function (e) {
 			e.preventDefault();
 			errorEl.hide();
 			return false;
 		});
 
-		if ($('#content #username').attr('readonly')) {
+		if ($('#content #username').val()) {
 			$('#content #password').val('').focus();
 		} else {
 			$('#content #username').focus();
 		}
 		$('#content #noscript').val('false');
+	};
+
+	Login.capsLockCheck = (inputEl, warningEl) => {
+		const toggle = (state) => {
+			warningEl.classList[state ? 'remove' : 'add']('hidden');
+			warningEl.parentNode.classList[state ? 'add' : 'remove']('has-warning');
+		};
+		if (!inputEl) {
+			return;
+		}
+		inputEl.addEventListener('keyup', function (e) {
+			if (Login._capsState && e.key === 'CapsLock') {
+				toggle(false);
+				Login._capsState = !Login._capsState;
+				return;
+			}
+			Login._capsState = e.getModifierState && e.getModifierState('CapsLock');
+			toggle(Login._capsState);
+		});
+
+		if (Login._capsState) {
+			toggle(true);
+		}
 	};
 
 	return Login;

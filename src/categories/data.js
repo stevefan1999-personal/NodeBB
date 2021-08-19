@@ -1,111 +1,112 @@
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
-var winston = require('winston');
+const validator = require('validator');
 
-var db = require('../database');
+const db = require('../database');
+const meta = require('../meta');
+const plugins = require('../plugins');
+const utils = require('../utils');
+
+const intFields = [
+	'cid', 'parentCid', 'disabled', 'isSection', 'order',
+	'topic_count', 'post_count', 'numRecentReplies',
+	'minTags', 'maxTags', 'postQueue', 'subCategoriesPerPage',
+];
 
 module.exports = function (Categories) {
-	Categories.getCategoryData = function (cid, callback) {
-		async.waterfall([
-			function (next) {
-				db.getObject('category:' + cid, next);
-			},
-			function (category, next) {
-				modifyCategory(category);
-				next(null, category);
-			},
-		], callback);
-	};
-
-	Categories.getCategoriesData = function (cids, callback) {
-		Categories.getCategoriesFields(cids, [], callback);
-	};
-
-	function modifyCategory(category) {
-		if (!category) {
-			return;
-		}
-
-		category.name = validator.escape(String(category.name || ''));
-		category.disabled = category.hasOwnProperty('disabled') ? parseInt(category.disabled, 10) === 1 : undefined;
-		category.isSection = category.hasOwnProperty('isSection') ? parseInt(category.isSection, 10) === 1 : undefined;
-
-		if (category.hasOwnProperty('icon')) {
-			category.icon = category.icon || 'hidden';
-		}
-
-		if (category.hasOwnProperty('post_count')) {
-			category.post_count = category.post_count || 0;
-			category.totalPostCount = category.post_count;
-		}
-
-		if (category.hasOwnProperty('topic_count')) {
-			category.topic_count = category.topic_count || 0;
-			category.totalTopicCount = category.topic_count;
-		}
-
-		if (category.image) {
-			category.backgroundImage = category.image;
-		}
-
-		if (category.description) {
-			category.description = validator.escape(String(category.description));
-			category.descriptionParsed = category.descriptionParsed || category.description;
-		}
-	}
-
-	Categories.getCategoryField = function (cid, field, callback) {
-		db.getObjectField('category:' + cid, field, callback);
-	};
-
-	Categories.getCategoriesFields = function (cids, fields, callback) {
+	Categories.getCategoriesFields = async function (cids, fields) {
 		if (!Array.isArray(cids) || !cids.length) {
-			return callback(null, []);
+			return [];
 		}
 
-		var keys = cids.map(function (cid) {
-			return 'category:' + cid;
+		const keys = cids.map(cid => `category:${cid}`);
+		const categories = await db.getObjects(keys, fields);
+		const result = await plugins.hooks.fire('filter:category.getFields', {
+			cids: cids,
+			categories: categories,
+			fields: fields,
+			keys: keys,
 		});
-		async.waterfall([
-			function (next) {
-				if (fields.length) {
-					db.getObjectsFields(keys, fields, next);
-				} else {
-					db.getObjects(keys, next);
-				}
-			},
-			function (categories, next) {
-				categories.forEach(modifyCategory);
-				next(null, categories);
-			},
-		], callback);
+		result.categories.forEach(category => modifyCategory(category, fields));
+		return result.categories;
 	};
 
-	Categories.getMultipleCategoryFields = function (cids, fields, callback) {
-		winston.warn('[deprecated] Categories.getMultipleCategoryFields is deprecated please use Categories.getCategoriesFields');
-		Categories.getCategoriesFields(cids, fields, callback);
+	Categories.getCategoryData = async function (cid) {
+		const categories = await Categories.getCategoriesFields([cid], []);
+		return categories && categories.length ? categories[0] : null;
 	};
 
-	Categories.getAllCategoryFields = function (fields, callback) {
-		async.waterfall([
-			async.apply(db.getSortedSetRange, 'categories:cid', 0, -1),
-			function (cids, next) {
-				Categories.getCategoriesFields(cids, fields, next);
-			},
-		], callback);
+	Categories.getCategoriesData = async function (cids) {
+		return await Categories.getCategoriesFields(cids, []);
 	};
 
-	Categories.getCategoryFields = function (cid, fields, callback) {
-		db.getObjectFields('category:' + cid, fields, callback);
+	Categories.getCategoryField = async function (cid, field) {
+		const category = await Categories.getCategoryFields(cid, [field]);
+		return category ? category[field] : null;
 	};
 
-	Categories.setCategoryField = function (cid, field, value, callback) {
-		db.setObjectField('category:' + cid, field, value, callback);
+	Categories.getCategoryFields = async function (cid, fields) {
+		const categories = await Categories.getCategoriesFields([cid], fields);
+		return categories ? categories[0] : null;
 	};
 
-	Categories.incrementCategoryFieldBy = function (cid, field, value, callback) {
-		db.incrObjectFieldBy('category:' + cid, field, value, callback);
+	Categories.getAllCategoryFields = async function (fields) {
+		const cids = await Categories.getAllCidsFromSet('categories:cid');
+		return await Categories.getCategoriesFields(cids, fields);
+	};
+
+	Categories.setCategoryField = async function (cid, field, value) {
+		await db.setObjectField(`category:${cid}`, field, value);
+	};
+
+	Categories.incrementCategoryFieldBy = async function (cid, field, value) {
+		await db.incrObjectFieldBy(`category:${cid}`, field, value);
 	};
 };
+
+function defaultIntField(category, fields, fieldName, defaultField) {
+	if (!fields.length || fields.includes(fieldName)) {
+		const useDefault = !category.hasOwnProperty(fieldName) ||
+			category[fieldName] === null ||
+			category[fieldName] === '' ||
+			!utils.isNumber(category[fieldName]);
+
+		category[fieldName] = useDefault ? meta.config[defaultField] : category[fieldName];
+	}
+}
+
+function modifyCategory(category, fields) {
+	if (!category) {
+		return;
+	}
+
+	defaultIntField(category, fields, 'minTags', 'minimumTagsPerTopic');
+	defaultIntField(category, fields, 'maxTags', 'maximumTagsPerTopic');
+	defaultIntField(category, fields, 'postQueue', 'postQueue');
+
+	db.parseIntFields(category, intFields, fields);
+
+	const escapeFields = ['name', 'color', 'bgColor', 'imageClass', 'class', 'link'];
+	escapeFields.forEach((field) => {
+		if (category.hasOwnProperty(field)) {
+			category[field] = validator.escape(String(category[field] || ''));
+		}
+	});
+
+	if (category.hasOwnProperty('icon')) {
+		category.icon = category.icon || 'hidden';
+	}
+
+	if (category.hasOwnProperty('post_count')) {
+		category.totalPostCount = category.post_count;
+	}
+
+	if (category.hasOwnProperty('topic_count')) {
+		category.totalTopicCount = category.topic_count;
+	}
+
+	if (category.description) {
+		category.description = validator.escape(String(category.description));
+		category.descriptionParsed = category.descriptionParsed || category.description;
+	}
+}

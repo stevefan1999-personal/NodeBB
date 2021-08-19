@@ -1,106 +1,87 @@
 'use strict';
 
-var async = require('async');
+const meta = require('../meta');
+const user = require('../user');
+const plugins = require('../plugins');
+const privileges = require('../privileges');
 
-var meta = require('../meta');
-var user = require('../user');
-
-var sockets = require('../socket.io');
+const sockets = require('../socket.io');
 
 
 module.exports = function (Messaging) {
-	Messaging.editMessage = function (uid, mid, roomId, content, callback) {
-		var uids;
-		async.waterfall([
-			function (next) {
-				Messaging.getMessageField(mid, 'content', next);
-			},
-			function (raw, next) {
-				if (raw === content) {
-					return callback();
-				}
+	Messaging.editMessage = async (uid, mid, roomId, content) => {
+		await Messaging.checkContent(content);
+		const raw = await Messaging.getMessageField(mid, 'content');
+		if (raw === content) {
+			return;
+		}
 
-				Messaging.setMessageFields(mid, {
-					content: content,
-					edited: Date.now(),
-				}, next);
-			},
-			function (next) {
-				Messaging.getUidsInRoom(roomId, 0, -1, next);
-			},
-			function (_uids, next) {
-				uids = _uids;
-				Messaging.getMessagesData([mid], uid, roomId, true, next);
-			},
-			function (messages, next) {
-				uids.forEach(function (uid) {
-					sockets.in('uid_' + uid).emit('event:chats.edit', {
-						messages: messages,
-					});
-				});
-				next();
-			},
-		], callback);
+		const payload = await plugins.hooks.fire('filter:messaging.edit', {
+			content: content,
+			edited: Date.now(),
+		});
+
+		if (!String(payload.content).trim()) {
+			throw new Error('[[error:invalid-chat-message]]');
+		}
+		await Messaging.setMessageFields(mid, payload);
+
+		// Propagate this change to users in the room
+		const [uids, messages] = await Promise.all([
+			Messaging.getUidsInRoom(roomId, 0, -1),
+			Messaging.getMessagesData([mid], uid, roomId, true),
+		]);
+
+		uids.forEach((uid) => {
+			sockets.in(`uid_${uid}`).emit('event:chats.edit', {
+				messages: messages,
+			});
+		});
 	};
 
-	Messaging.canEdit = function (messageId, uid, callback) {
-		canEditDelete(messageId, uid, 'edit', callback);
-	};
-
-	Messaging.canDelete = function (messageId, uid, callback) {
-		canEditDelete(messageId, uid, 'delete', callback);
-	};
-
-	function canEditDelete(messageId, uid, type, callback) {
-		var durationConfig = '';
+	const canEditDelete = async (messageId, uid, type) => {
+		let durationConfig = '';
 		if (type === 'edit') {
 			durationConfig = 'chatEditDuration';
 		} else if (type === 'delete') {
 			durationConfig = 'chatDeleteDuration';
 		}
 
-		if (parseInt(meta.config.disableChat, 10) === 1) {
-			return callback(new Error('[[error:chat-disabled]]'));
-		} else if (parseInt(meta.config.disableChatMessageEditing, 10) === 1) {
-			return callback(new Error('[[error:chat-message-editing-disabled]]'));
+		const isAdminOrGlobalMod = await user.isAdminOrGlobalMod(uid);
+
+		if (meta.config.disableChat) {
+			throw new Error('[[error:chat-disabled]]');
+		} else if (!isAdminOrGlobalMod && meta.config.disableChatMessageEditing) {
+			throw new Error('[[error:chat-message-editing-disabled]]');
 		}
 
-		async.waterfall([
-			function (next) {
-				user.getUserFields(uid, ['banned', 'email:confirmed'], next);
-			},
-			function (userData, next) {
-				if (parseInt(userData.banned, 10) === 1) {
-					return callback(new Error('[[error:user-banned]]'));
-				}
+		const userData = await user.getUserFields(uid, ['banned']);
+		if (userData.banned) {
+			throw new Error('[[error:user-banned]]');
+		}
 
-				if (parseInt(meta.config.requireEmailConfirmation, 10) === 1 && parseInt(userData['email:confirmed'], 10) !== 1) {
-					return callback(new Error('[[error:email-not-confirmed]]'));
-				}
-				async.parallel({
-					isAdmin: function (next) {
-						user.isAdministrator(uid, next);
-					},
-					messageData: function (next) {
-						Messaging.getMessageFields(messageId, ['fromuid', 'timestamp'], next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				if (results.isAdmin) {
-					return callback();
-				}
-				var chatConfigDuration = parseInt(meta.config[durationConfig], 10);
-				if (chatConfigDuration && Date.now() - parseInt(results.messageData.timestamp, 10) > chatConfigDuration * 1000) {
-					return callback(new Error('[[error:chat-' + type + '-duration-expired, ' + meta.config[durationConfig] + ']]'));
-				}
+		const canChat = await privileges.global.can('chat', uid);
+		if (!canChat) {
+			throw new Error('[[error:no-privileges]]');
+		}
 
-				if (parseInt(results.messageData.fromuid, 10) === parseInt(uid, 10)) {
-					return callback();
-				}
+		const messageData = await Messaging.getMessageFields(messageId, ['fromuid', 'timestamp', 'system']);
+		if (isAdminOrGlobalMod && !messageData.system) {
+			return;
+		}
 
-				next(new Error('[[error:cant-' + type + '-chat-message]]'));
-			},
-		], callback);
-	}
+		const chatConfigDuration = meta.config[durationConfig];
+		if (chatConfigDuration && Date.now() - messageData.timestamp > chatConfigDuration * 1000) {
+			throw new Error(`[[error:chat-${type}-duration-expired, ${meta.config[durationConfig]}]]`);
+		}
+
+		if (messageData.fromuid === parseInt(uid, 10) && !messageData.system) {
+			return;
+		}
+
+		throw new Error(`[[error:cant-${type}-chat-message]]`);
+	};
+
+	Messaging.canEdit = async (messageId, uid) => await canEditDelete(messageId, uid, 'edit');
+	Messaging.canDelete = async (messageId, uid) => await canEditDelete(messageId, uid, 'delete');
 };

@@ -1,8 +1,9 @@
 'use strict';
 
-var navigationAdmin = require('../../navigation/admin');
-var SocketNavigation = module.exports;
+const navigationAdmin = require('../../navigation/admin');
 
-SocketNavigation.save = function (socket, data, callback) {
-	navigationAdmin.save(data, callback);
+const SocketNavigation = module.exports;
+
+SocketNavigation.save = async function (socket, data) {
+	await navigationAdmin.save(data);
 };

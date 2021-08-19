@@ -1,75 +1,76 @@
 'use strict';
 
-var async = require('async');
+const _ = require('lodash');
 
-var db = require('../database');
-var categories = require('../categories');
+const db = require('../database');
+const categories = require('../categories');
+const plugins = require('../plugins');
 
 module.exports = function (User) {
-	User.getIgnoredCategories = function (uid, callback) {
-		db.getSortedSetRange('uid:' + uid + ':ignored:cids', 0, -1, callback);
+	User.setCategoryWatchState = async function (uid, cids, state) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return;
+		}
+		const isStateValid = Object.values(categories.watchStates).includes(parseInt(state, 10));
+		if (!isStateValid) {
+			throw new Error('[[error:invalid-watch-state]]');
+		}
+		cids = Array.isArray(cids) ? cids : [cids];
+		const exists = await categories.exists(cids);
+		if (exists.includes(false)) {
+			throw new Error('[[error:no-category]]');
+		}
+		await db.sortedSetsAdd(cids.map(cid => `cid:${cid}:uid:watch:state`), state, uid);
 	};
 
-	User.getWatchedCategories = function (uid, callback) {
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					ignored: function (next) {
-						User.getIgnoredCategories(uid, next);
-					},
-					all: function (next) {
-						db.getSortedSetRange('categories:cid', 0, -1, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				var watched = results.all.filter(function (cid) {
-					return cid && results.ignored.indexOf(cid) === -1;
-				});
-				next(null, watched);
-			},
-		], callback);
-	};
-
-	User.ignoreCategory = function (uid, cid, callback) {
-		if (!uid) {
-			return callback();
+	User.getCategoryWatchState = async function (uid) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return {};
 		}
 
-		async.waterfall([
-			function (next) {
-				categories.exists(cid, next);
-			},
-			function (exists, next) {
-				if (!exists) {
-					return next(new Error('[[error:no-category]]'));
-				}
-				db.sortedSetAdd('uid:' + uid + ':ignored:cids', Date.now(), cid, next);
-			},
-			function (next) {
-				db.sortedSetAdd('cid:' + cid + ':ignorers', Date.now(), uid, next);
-			},
-		], callback);
+		const cids = await categories.getAllCidsFromSet('categories:cid');
+		const states = await categories.getWatchState(cids, uid);
+		return _.zipObject(cids, states);
 	};
 
-	User.watchCategory = function (uid, cid, callback) {
-		if (!uid) {
-			return callback();
+	User.getIgnoredCategories = async function (uid) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return [];
 		}
+		const cids = await User.getCategoriesByStates(uid, [categories.watchStates.ignoring]);
+		const result = await plugins.hooks.fire('filter:user.getIgnoredCategories', {
+			uid: uid,
+			cids: cids,
+		});
+		return result.cids;
+	};
 
-		async.waterfall([
-			function (next) {
-				categories.exists(cid, next);
-			},
-			function (exists, next) {
-				if (!exists) {
-					return next(new Error('[[error:no-category]]'));
-				}
-				db.sortedSetRemove('uid:' + uid + ':ignored:cids', cid, next);
-			},
-			function (next) {
-				db.sortedSetRemove('cid:' + cid + ':ignorers', uid, next);
-			},
-		], callback);
+	User.getWatchedCategories = async function (uid) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return [];
+		}
+		const cids = await User.getCategoriesByStates(uid, [categories.watchStates.watching]);
+		const result = await plugins.hooks.fire('filter:user.getWatchedCategories', {
+			uid: uid,
+			cids: cids,
+		});
+		return result.cids;
+	};
+
+	User.getCategoriesByStates = async function (uid, states) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return await categories.getAllCidsFromSet('categories:cid');
+		}
+		const cids = await categories.getAllCidsFromSet('categories:cid');
+		const userState = await categories.getWatchState(cids, uid);
+		return cids.filter((cid, index) => states.includes(userState[index]));
+	};
+
+	User.ignoreCategory = async function (uid, cid) {
+		await User.setCategoryWatchState(uid, cid, categories.watchStates.ignoring);
+	};
+
+	User.watchCategory = async function (uid, cid) {
+		await User.setCategoryWatchState(uid, cid, categories.watchStates.watching);
 	};
 };

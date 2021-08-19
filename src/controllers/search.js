@@ -1,85 +1,113 @@
 
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
+const validator = require('validator');
 
-var meta = require('../meta');
-var plugins = require('../plugins');
-var search = require('../search');
-var categories = require('../categories');
-var pagination = require('../pagination');
-var privileges = require('../privileges');
-var helpers = require('./helpers');
+const meta = require('../meta');
+const plugins = require('../plugins');
+const search = require('../search');
+const categories = require('../categories');
+const pagination = require('../pagination');
+const privileges = require('../privileges');
+const utils = require('../utils');
+const helpers = require('./helpers');
 
-var searchController = module.exports;
+const searchController = module.exports;
 
-searchController.search = function (req, res, next) {
-	if (!plugins.hasListeners('filter:search.query')) {
+searchController.search = async function (req, res, next) {
+	if (!plugins.hooks.hasListeners('filter:search.query')) {
 		return next();
 	}
-	var page = Math.max(1, parseInt(req.query.page, 10)) || 1;
+	const page = Math.max(1, parseInt(req.query.page, 10)) || 1;
 
-	async.waterfall([
-		function (next) {
-			privileges.global.can('search:content', req.uid, next);
-		},
-		function (allowed, next) {
-			if (!allowed) {
-				return helpers.notAllowed(req, res);
-			}
+	const searchOnly = parseInt(req.query.searchOnly, 10) === 1;
 
-			if (req.query.categories && !Array.isArray(req.query.categories)) {
-				req.query.categories = [req.query.categories];
-			}
+	const userPrivileges = await utils.promiseParallel({
+		'search:users': privileges.global.can('search:users', req.uid),
+		'search:content': privileges.global.can('search:content', req.uid),
+		'search:tags': privileges.global.can('search:tags', req.uid),
+	});
+	req.query.in = req.query.in || meta.config.searchDefaultIn || 'titlesposts';
+	const allowed = (req.query.in === 'users' && userPrivileges['search:users']) ||
+					(req.query.in === 'tags' && userPrivileges['search:tags']) ||
+					(req.query.in === 'categories') ||
+					(['titles', 'titlesposts', 'posts'].includes(req.query.in) && userPrivileges['search:content']);
 
-			var data = {
-				query: req.query.term,
-				searchIn: req.query.in || 'posts',
-				matchWords: req.query.matchWords || 'all',
-				postedBy: req.query.by,
-				categories: req.query.categories,
-				searchChildren: req.query.searchChildren,
-				hasTags: req.query.hasTags,
-				replies: req.query.replies,
-				repliesFilter: req.query.repliesFilter,
-				timeRange: req.query.timeRange,
-				timeFilter: req.query.timeFilter,
-				sortBy: req.query.sortBy || meta.config.searchDefaultSortBy || '',
-				sortDirection: req.query.sortDirection,
-				page: page,
-				uid: req.uid,
-				qs: req.query,
-			};
+	if (!allowed) {
+		return helpers.notAllowed(req, res);
+	}
 
-			async.parallel({
-				categories: async.apply(categories.buildForSelect, req.uid, 'read'),
-				search: async.apply(search.search, data),
-			}, next);
-		},
-		function (results) {
-			results.categories = results.categories.filter(function (category) {
-				return category && !category.link;
-			});
+	if (req.query.categories && !Array.isArray(req.query.categories)) {
+		req.query.categories = [req.query.categories];
+	}
+	if (req.query.hasTags && !Array.isArray(req.query.hasTags)) {
+		req.query.hasTags = [req.query.hasTags];
+	}
 
-			var categoriesData = [
-				{ value: 'all', text: '[[unread:all_categories]]' },
-				{ value: 'watched', text: '[[category:watched-categories]]' },
-			].concat(results.categories);
+	const data = {
+		query: req.query.term,
+		searchIn: req.query.in,
+		matchWords: req.query.matchWords || 'all',
+		postedBy: req.query.by,
+		categories: req.query.categories,
+		searchChildren: req.query.searchChildren,
+		hasTags: req.query.hasTags,
+		replies: req.query.replies,
+		repliesFilter: req.query.repliesFilter,
+		timeRange: req.query.timeRange,
+		timeFilter: req.query.timeFilter,
+		sortBy: req.query.sortBy || meta.config.searchDefaultSortBy || '',
+		sortDirection: req.query.sortDirection,
+		page: page,
+		itemsPerPage: req.query.itemsPerPage,
+		uid: req.uid,
+		qs: req.query,
+	};
 
-			var searchData = results.search;
-			searchData.categories = categoriesData;
-			searchData.categoriesCount = Math.max(10, Math.min(20, categoriesData.length));
-			searchData.pagination = pagination.create(page, searchData.pageCount, req.query);
-			searchData.showAsPosts = !req.query.showAs || req.query.showAs === 'posts';
-			searchData.showAsTopics = req.query.showAs === 'topics';
-			searchData.title = '[[global:header.search]]';
-			searchData.breadcrumbs = helpers.buildBreadcrumbs([{ text: '[[global:search]]' }]);
-			searchData.expandSearch = !req.query.term;
-			searchData.searchDefaultSortBy = meta.config.searchDefaultSortBy || '';
-			searchData.search_query = validator.escape(String(req.query.term || ''));
-			searchData.term = req.query.term;
-			res.render('search', searchData);
-		},
-	], next);
+	const [searchData, categoriesData] = await Promise.all([
+		search.search(data),
+		buildCategories(req.uid, searchOnly),
+	]);
+
+	searchData.pagination = pagination.create(page, searchData.pageCount, req.query);
+	searchData.multiplePages = searchData.pageCount > 1;
+	searchData.search_query = validator.escape(String(req.query.term || ''));
+	searchData.term = req.query.term;
+
+	if (searchOnly) {
+		return res.json(searchData);
+	}
+
+	searchData.allCategories = categoriesData;
+	searchData.allCategoriesCount = Math.max(10, Math.min(20, categoriesData.length));
+
+	searchData.breadcrumbs = helpers.buildBreadcrumbs([{ text: '[[global:search]]' }]);
+	searchData.expandSearch = !req.query.term;
+
+	searchData.showAsPosts = !req.query.showAs || req.query.showAs === 'posts';
+	searchData.showAsTopics = req.query.showAs === 'topics';
+	searchData.title = '[[global:header.search]]';
+
+	searchData.searchDefaultSortBy = meta.config.searchDefaultSortBy || '';
+	searchData.searchDefaultIn = meta.config.searchDefaultIn || 'titlesposts';
+	searchData.privileges = userPrivileges;
+
+	res.render('search', searchData);
 };
+
+async function buildCategories(uid, searchOnly) {
+	if (searchOnly) {
+		return [];
+	}
+
+	const cids = await categories.getCidsByPrivilege('categories:cid', uid, 'read');
+	let categoriesData = await categories.getCategoriesData(cids);
+	categoriesData = categoriesData.filter(category => category && !category.link);
+	categoriesData = categories.getTree(categoriesData);
+	categoriesData = categories.buildForSelectCategories(categoriesData, ['text', 'value']);
+
+	return [
+		{ value: 'all', text: '[[unread:all_categories]]' },
+		{ value: 'watched', text: '[[category:watched-categories]]' },
+	].concat(categoriesData);
+}

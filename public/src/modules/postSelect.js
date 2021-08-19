@@ -3,60 +3,70 @@
 
 define('postSelect', ['components'], function (components) {
 	var PostSelect = {};
+	var onSelect;
 
 	PostSelect.pids = [];
 
-	PostSelect.init = function (onSelect) {
+	var allowMainPostSelect = false;
+
+	PostSelect.init = function (_onSelect, options) {
 		PostSelect.pids.length = 0;
-		components.get('topic').on('click', '[data-pid]', function () {
-			PostSelect.togglePostSelection($(this), onSelect);
-		});
+		onSelect = _onSelect;
+		options = options || {};
+		allowMainPostSelect = options.allowMainPostSelect || false;
+		$('#content').on('click', '[component="topic"] [component="post"]', onPostClicked);
 		disableClicksOnPosts();
 	};
+
+	function onPostClicked(ev) {
+		ev.stopPropagation();
+		var pidClicked = $(this).attr('data-pid');
+		var postEls = $('[component="topic"] [data-pid="' + pidClicked + '"]');
+		if (!allowMainPostSelect && parseInt($(this).attr('data-index'), 10) === 0) {
+			return;
+		}
+		PostSelect.togglePostSelection(postEls, pidClicked);
+	}
 
 	PostSelect.disable = function () {
 		PostSelect.pids.forEach(function (pid) {
 			components.get('post', 'pid', pid).toggleClass('bg-success', false);
 		});
-		components.get('topic').off('click', '[data-pid]');
+
+		$('#content').off('click', '[component="topic"] [component="post"]', onPostClicked);
 		enableClicksOnPosts();
 	};
 
-	PostSelect.togglePostSelection = function (post, callback) {
-		var newPid = post.attr('data-pid');
-
-		if (parseInt(post.attr('data-index'), 10) === 0) {
-			return;
-		}
-
-		if (newPid) {
-			var index = PostSelect.pids.indexOf(newPid);
+	PostSelect.togglePostSelection = function (postEls, pid) {
+		if (pid) {
+			var index = PostSelect.pids.indexOf(pid);
 			if (index === -1) {
-				PostSelect.pids.push(newPid);
-				post.toggleClass('bg-success', true);
+				PostSelect.pids.push(pid);
+				postEls.toggleClass('bg-success', true);
 			} else {
 				PostSelect.pids.splice(index, 1);
-				post.toggleClass('bg-success', false);
+				postEls.toggleClass('bg-success', false);
 			}
 
 			if (PostSelect.pids.length) {
 				PostSelect.pids.sort(function (a, b) { return a - b; });
 			}
-			callback();
+			if (typeof onSelect === 'function') {
+				onSelect();
+			}
 		}
 	};
-
 
 	function disableClicks() {
 		return false;
 	}
 
 	function disableClicksOnPosts() {
-		components.get('post').on('click', 'button,a', disableClicks);
+		$('#content').on('click', '[component="post"] button, [component="post"] a', disableClicks);
 	}
 
 	function enableClicksOnPosts() {
-		components.get('post').off('click', 'button,a', disableClicks);
+		$('#content').off('click', '[component="post"] button, [component="post"] a', disableClicks);
 	}
 
 	return PostSelect;

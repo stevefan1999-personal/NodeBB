@@ -1,122 +1,74 @@
 'use strict';
 
-var async = require('async');
-
-var user = require('../../user');
-var topics = require('../../topics');
+const db = require('../../database');
+const user = require('../../user');
+const topics = require('../../topics');
 
 module.exports = function (SocketTopics) {
-	SocketTopics.markAsRead = function (socket, tids, callback) {
+	SocketTopics.markAsRead = async function (socket, tids) {
+		if (!Array.isArray(tids) || socket.uid <= 0) {
+			throw new Error('[[error:invalid-data]]');
+		}
+		const hasMarked = await topics.markAsRead(tids, socket.uid);
+		const promises = [topics.markTopicNotificationsRead(tids, socket.uid)];
+		if (hasMarked) {
+			promises.push(topics.pushUnreadCount(socket.uid));
+		}
+		await Promise.all(promises);
+	};
+
+	SocketTopics.markTopicNotificationsRead = async function (socket, tids) {
 		if (!Array.isArray(tids) || !socket.uid) {
-			return callback(new Error('[[error:invalid-data]]'));
+			throw new Error('[[error:invalid-data]]');
 		}
-		async.waterfall([
-			function (next) {
-				topics.markAsRead(tids, socket.uid, next);
-			},
-			function (hasMarked, next) {
-				if (hasMarked) {
-					topics.pushUnreadCount(socket.uid);
-
-					topics.markTopicNotificationsRead(tids, socket.uid);
-				}
-				next();
-			},
-		], callback);
+		await topics.markTopicNotificationsRead(tids, socket.uid);
 	};
 
-	SocketTopics.markTopicNotificationsRead = function (socket, tids, callback) {
-		if (!Array.isArray(tids) || !socket.uid) {
-			return callback(new Error('[[error:invalid-data]]'));
+	SocketTopics.markAllRead = async function (socket) {
+		if (socket.uid <= 0) {
+			throw new Error('[[error:invalid-uid]]');
 		}
-		topics.markTopicNotificationsRead(tids, socket.uid, callback);
+		await topics.markAllRead(socket.uid);
+		topics.pushUnreadCount(socket.uid);
 	};
 
-	SocketTopics.markAllRead = function (socket, data, callback) {
-		if (!socket.uid) {
-			return callback(new Error('[[error:invalid-uid]]'));
+	SocketTopics.markCategoryTopicsRead = async function (socket, cid) {
+		const tids = await topics.getUnreadTids({ cid: cid, uid: socket.uid, filter: '' });
+		await SocketTopics.markAsRead(socket, tids);
+	};
+
+	SocketTopics.markUnread = async function (socket, tid) {
+		if (!tid || socket.uid <= 0) {
+			throw new Error('[[error:invalid-data]]');
 		}
-		async.waterfall([
-			function (next) {
-				topics.markAllRead(socket.uid, next);
-			},
-			function (next) {
-				topics.pushUnreadCount(socket.uid);
-				next();
-			},
-		], callback);
+		await topics.markUnread(tid, socket.uid);
+		topics.pushUnreadCount(socket.uid);
 	};
 
-	SocketTopics.markCategoryTopicsRead = function (socket, cid, callback) {
-		async.waterfall([
-			function (next) {
-				topics.getUnreadTids({ cid: cid, uid: socket.uid, filter: '' }, next);
-			},
-			function (tids, next) {
-				SocketTopics.markAsRead(socket, tids, next);
-			},
-		], callback);
-	};
-
-	SocketTopics.markUnread = function (socket, tid, callback) {
-		if (!tid || !socket.uid) {
-			return callback(new Error('[[error:invalid-data]]'));
-		}
-		async.waterfall([
-			function (next) {
-				topics.markUnread(tid, socket.uid, next);
-			},
-			function (next) {
-				topics.pushUnreadCount(socket.uid);
-				next();
-			},
-		], callback);
-	};
-
-	SocketTopics.markAsUnreadForAll = function (socket, tids, callback) {
+	SocketTopics.markAsUnreadForAll = async function (socket, tids) {
 		if (!Array.isArray(tids)) {
-			return callback(new Error('[[error:invalid-tid]]'));
+			throw new Error('[[error:invalid-tid]]');
 		}
 
-		if (!socket.uid) {
-			return callback(new Error('[[error:no-privileges]]'));
+		if (socket.uid <= 0) {
+			throw new Error('[[error:no-privileges]]');
 		}
-
-		async.waterfall([
-			function (next) {
-				user.isAdministrator(socket.uid, next);
-			},
-			function (isAdmin, next) {
-				async.each(tids, function (tid, next) {
-					async.waterfall([
-						function (next) {
-							topics.exists(tid, next);
-						},
-						function (exists, next) {
-							if (!exists) {
-								return next(new Error('[[error:no-topic]]'));
-							}
-							topics.getTopicField(tid, 'cid', next);
-						},
-						function (cid, next) {
-							user.isModerator(socket.uid, cid, next);
-						},
-						function (isMod, next) {
-							if (!isAdmin && !isMod) {
-								return next(new Error('[[error:no-privileges]]'));
-							}
-							topics.markAsUnreadForAll(tid, next);
-						},
-						function (next) {
-							topics.updateRecent(tid, Date.now(), next);
-						},
-					], next);
-				}, next);
-			},
-			function (next) {
-				topics.pushUnreadCount(socket.uid);
-				next();
-			},
-		], callback);
+		const isAdmin = await user.isAdministrator(socket.uid);
+		const now = Date.now();
+		await Promise.all(tids.map(async (tid) => {
+			const topicData = await topics.getTopicFields(tid, ['tid', 'cid']);
+			if (!topicData.tid) {
+				throw new Error('[[error:no-topic]]');
+			}
+			const isMod = await user.isModerator(socket.uid, topicData.cid);
+			if (!isAdmin && !isMod) {
+				throw new Error('[[error:no-privileges]]');
+			}
+			await topics.markAsUnreadForAll(tid);
+			await topics.updateRecent(tid, now);
+			await db.sortedSetAdd(`cid:${topicData.cid}:tids:lastposttime`, now, tid);
+			await topics.setTopicField(tid, 'lastposttime', now);
+		}));
+		topics.pushUnreadCount(socket.uid);
 	};
 };

@@ -2,17 +2,17 @@
 'use strict';
 
 
-var winston = require('winston');
-var async = require('async');
-var nconf = require('nconf');
-var session = require('express-session');
-var _ = require('lodash');
-var semver = require('semver');
-var prompt = require('prompt');
-var db;
-var client;
+const winston = require('winston');
+const nconf = require('nconf');
+const semver = require('semver');
+const prompt = require('prompt');
+const utils = require('../utils');
 
-var mongoModule = module.exports;
+let client;
+
+const connection = require('./mongo/connection');
+
+const mongoModule = module.exports;
 
 function isUriNotSpecified() {
 	return !prompt.history('mongo:uri').value;
@@ -59,131 +59,39 @@ mongoModule.questions = [
 	},
 ];
 
-mongoModule.helpers = mongoModule.helpers || {};
-mongoModule.helpers.mongo = require('./mongo/helpers');
-
-mongoModule.getConnectionString = function () {
-	var usernamePassword = '';
-	if (nconf.get('mongo:username') && nconf.get('mongo:password')) {
-		usernamePassword = nconf.get('mongo:username') + ':' + encodeURIComponent(nconf.get('mongo:password')) + '@';
-	} else {
-		winston.warn('You have no mongo username/password setup!');
-	}
-
-	// Sensible defaults for Mongo, if not set
-	if (!nconf.get('mongo:host')) {
-		nconf.set('mongo:host', '127.0.0.1');
-	}
-	if (!nconf.get('mongo:port')) {
-		nconf.set('mongo:port', 27017);
-	}
-	if (!nconf.get('mongo:database')) {
-		nconf.set('mongo:database', 'nodebb');
-	}
-
-	var hosts = nconf.get('mongo:host').split(',');
-	var ports = nconf.get('mongo:port').toString().split(',');
-	var servers = [];
-
-	for (var i = 0; i < hosts.length; i += 1) {
-		servers.push(hosts[i] + ':' + ports[i]);
-	}
-
-	return nconf.get('mongo:uri') || 'mongodb://' + usernamePassword + servers.join() + '/' + nconf.get('mongo:database');
+mongoModule.init = async function () {
+	client = await connection.connect(nconf.get('mongo'));
+	mongoModule.client = client.db();
 };
 
-mongoModule.getConnectionOptions = function () {
-	var connOptions = {
-		poolSize: 10,
-		reconnectTries: 3600,
-		reconnectInterval: 1000,
-		autoReconnect: true,
-	};
+mongoModule.createSessionStore = async function (options) {
+	const MongoStore = require('connect-mongo');
+	const meta = require('../meta');
 
-	return _.merge(connOptions, nconf.get('mongo:options') || {});
-};
-
-mongoModule.init = function (callback) {
-	callback = callback || function () { };
-
-	var mongoClient = require('mongodb').MongoClient;
-
-	var connString = mongoModule.getConnectionString();
-	var connOptions = mongoModule.getConnectionOptions();
-
-	mongoClient.connect(connString, connOptions, function (err, _client) {
-		if (err) {
-			winston.error('NodeBB could not connect to your Mongo database. Mongo returned the following error', err);
-			return callback(err);
-		}
-		client = _client;
-		db = client.db();
-
-		mongoModule.client = db;
-
-		require('./mongo/main')(db, mongoModule);
-		require('./mongo/hash')(db, mongoModule);
-		require('./mongo/sets')(db, mongoModule);
-		require('./mongo/sorted')(db, mongoModule);
-		require('./mongo/list')(db, mongoModule);
-		require('./mongo/transaction')(db, mongoModule);
-		callback();
+	const store = MongoStore.create({
+		clientPromise: connection.connect(options),
+		ttl: meta.getSessionTTLSeconds(),
 	});
+
+	return store;
 };
 
-mongoModule.initSessionStore = function (callback) {
-	var meta = require('../meta');
-	var sessionStore;
-
-	var ttl = meta.getSessionTTLSeconds();
-
-	if (nconf.get('redis')) {
-		sessionStore = require('connect-redis')(session);
-		var rdb = require('./redis');
-		rdb.client = rdb.connect();
-
-		mongoModule.sessionStore = new sessionStore({
-			client: rdb.client,
-			ttl: ttl,
-		});
-	} else if (nconf.get('mongo')) {
-		sessionStore = require('connect-mongo')(session);
-		mongoModule.sessionStore = new sessionStore({
-			db: db,
-			ttl: ttl,
-		});
-	}
-
-	callback();
-};
-
-mongoModule.createIndices = function (callback) {
-	function createIndex(collection, index, options, callback) {
-		mongoModule.client.collection(collection).createIndex(index, options, callback);
-	}
-
+mongoModule.createIndices = async function () {
 	if (!mongoModule.client) {
 		winston.warn('[database/createIndices] database not initialized');
-		return callback();
+		return;
 	}
 
 	winston.info('[database] Checking database indices.');
-	async.series([
-		async.apply(createIndex, 'objects', { _key: 1, score: -1 }, { background: true }),
-		async.apply(createIndex, 'objects', { _key: 1, value: -1 }, { background: true, unique: true, sparse: true }),
-		async.apply(createIndex, 'objects', { expireAt: 1 }, { expireAfterSeconds: 0, background: true }),
-	], function (err) {
-		if (err) {
-			winston.error('Error creating index', err);
-			return callback(err);
-		}
-		winston.info('[database] Checking database indices done!');
-		callback();
-	});
+	const collection = mongoModule.client.collection('objects');
+	await collection.createIndex({ _key: 1, score: -1 }, { background: true });
+	await collection.createIndex({ _key: 1, value: -1 }, { background: true, unique: true, sparse: true });
+	await collection.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, background: true });
+	winston.info('[database] Checking database indices done!');
 };
 
 mongoModule.checkCompatibility = function (callback) {
-	var mongoPkg = require('mongodb/package.json');
+	const mongoPkg = require('mongodb/package.json');
 	mongoModule.checkCompatibilityVersion(mongoPkg.version, callback);
 };
 
@@ -195,86 +103,86 @@ mongoModule.checkCompatibilityVersion = function (version, callback) {
 	callback();
 };
 
-mongoModule.info = function (db, callback) {
+mongoModule.info = async function (db) {
 	if (!db) {
-		return callback();
+		const client = await connection.connect(nconf.get('mongo'));
+		db = client.db();
 	}
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				serverStatus: function (next) {
-					db.command({ serverStatus: 1 }, next);
-				},
-				stats: function (next) {
-					db.command({ dbStats: 1 }, next);
-				},
-				listCollections: function (next) {
-					getCollectionStats(db, next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			var stats = results.stats;
-			var scale = 1024 * 1024 * 1024;
+	mongoModule.client = mongoModule.client || db;
+	let serverStatusError = '';
 
-			results.listCollections = results.listCollections.map(function (collectionInfo) {
-				return {
-					name: collectionInfo.ns,
-					count: collectionInfo.count,
-					size: collectionInfo.size,
-					avgObjSize: collectionInfo.avgObjSize,
-					storageSize: collectionInfo.storageSize,
-					totalIndexSize: collectionInfo.totalIndexSize,
-					indexSizes: collectionInfo.indexSizes,
-				};
-			});
+	async function getServerStatus() {
+		try {
+			return await db.command({ serverStatus: 1 });
+		} catch (err) {
+			serverStatusError = err.message;
+			// Override mongo error with more human-readable error
+			if (err.name === 'MongoError' && err.codeName === 'Unauthorized') {
+				serverStatusError = '[[admin/advanced/database:mongo.unauthorized]]';
+			}
+			winston.error(err.stack);
+		}
+	}
 
-			stats.mem = results.serverStatus.mem;
-			stats.mem = results.serverStatus.mem;
-			stats.mem.resident = (stats.mem.resident / 1024).toFixed(3);
-			stats.mem.virtual = (stats.mem.virtual / 1024).toFixed(3);
-			stats.mem.mapped = (stats.mem.mapped / 1024).toFixed(3);
-			stats.collectionData = results.listCollections;
-			stats.network = results.serverStatus.network;
-			stats.raw = JSON.stringify(stats, null, 4);
+	let [serverStatus, stats, listCollections] = await Promise.all([
+		getServerStatus(),
+		db.command({ dbStats: 1 }),
+		getCollectionStats(db),
+	]);
+	stats = stats || {};
+	serverStatus = serverStatus || {};
+	stats.serverStatusError = serverStatusError;
+	const scale = 1024 * 1024 * 1024;
 
-			stats.avgObjSize = stats.avgObjSize.toFixed(2);
-			stats.dataSize = (stats.dataSize / scale).toFixed(3);
-			stats.storageSize = (stats.storageSize / scale).toFixed(3);
-			stats.fileSize = stats.fileSize ? (stats.fileSize / scale).toFixed(3) : 0;
-			stats.indexSize = (stats.indexSize / scale).toFixed(3);
-			stats.storageEngine = results.serverStatus.storageEngine ? results.serverStatus.storageEngine.name : 'mmapv1';
-			stats.host = results.serverStatus.host;
-			stats.version = results.serverStatus.version;
-			stats.uptime = results.serverStatus.uptime;
-			stats.mongo = true;
+	listCollections = listCollections.map(collectionInfo => ({
+		name: collectionInfo.ns,
+		count: collectionInfo.count,
+		size: collectionInfo.size,
+		avgObjSize: collectionInfo.avgObjSize,
+		storageSize: collectionInfo.storageSize,
+		totalIndexSize: collectionInfo.totalIndexSize,
+		indexSizes: collectionInfo.indexSizes,
+	}));
 
-			next(null, stats);
-		},
-	], callback);
+	stats.mem = serverStatus.mem || { resident: 0, virtual: 0, mapped: 0 };
+	stats.mem.resident = (stats.mem.resident / 1024).toFixed(3);
+	stats.mem.virtual = (stats.mem.virtual / 1024).toFixed(3);
+	stats.mem.mapped = (stats.mem.mapped / 1024).toFixed(3);
+	stats.collectionData = listCollections;
+	stats.network = serverStatus.network || { bytesIn: 0, bytesOut: 0, numRequests: 0 };
+	stats.network.bytesIn = (stats.network.bytesIn / scale).toFixed(3);
+	stats.network.bytesOut = (stats.network.bytesOut / scale).toFixed(3);
+	stats.network.numRequests = utils.addCommas(stats.network.numRequests);
+	stats.raw = JSON.stringify(stats, null, 4);
+
+	stats.avgObjSize = stats.avgObjSize.toFixed(2);
+	stats.dataSize = (stats.dataSize / scale).toFixed(3);
+	stats.storageSize = (stats.storageSize / scale).toFixed(3);
+	stats.fileSize = stats.fileSize ? (stats.fileSize / scale).toFixed(3) : 0;
+	stats.indexSize = (stats.indexSize / scale).toFixed(3);
+	stats.storageEngine = serverStatus.storageEngine ? serverStatus.storageEngine.name : 'mmapv1';
+	stats.host = serverStatus.host;
+	stats.version = serverStatus.version;
+	stats.uptime = serverStatus.uptime;
+	stats.mongo = true;
+	return stats;
 };
 
-function getCollectionStats(db, callback) {
-	async.waterfall([
-		function (next) {
-			db.listCollections().toArray(next);
-		},
-		function (items, next) {
-			async.map(items, function (collection, next) {
-				db.collection(collection.name).stats(next);
-			}, next);
-		},
-	], callback);
+async function getCollectionStats(db) {
+	const items = await db.listCollections().toArray();
+	return await Promise.all(items.map(collection => db.collection(collection.name).stats()));
 }
 
 mongoModule.close = function (callback) {
 	callback = callback || function () {};
-	client.close(function (err) {
-		callback(err);
-	});
+	client.close(err => callback(err));
 };
 
-mongoModule.socketAdapter = function () {
-	var mongoAdapter = require('socket.io-adapter-mongo');
-	return mongoAdapter(mongoModule.getConnectionString());
-};
+require('./mongo/main')(mongoModule);
+require('./mongo/hash')(mongoModule);
+require('./mongo/sets')(mongoModule);
+require('./mongo/sorted')(mongoModule);
+require('./mongo/list')(mongoModule);
+require('./mongo/transaction')(mongoModule);
+
+require('../promisify')(mongoModule, ['client', 'sessionStore']);

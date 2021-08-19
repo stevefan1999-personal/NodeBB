@@ -1,102 +1,72 @@
 'use strict';
 
-var async = require('async');
+const user = require('../../user');
+const helpers = require('../helpers');
+const plugins = require('../../plugins');
+const pagination = require('../../pagination');
 
-var user = require('../../user');
-var helpers = require('../helpers');
-var plugins = require('../../plugins');
-var pagination = require('../../pagination');
+const notificationsController = module.exports;
 
-var notificationsController = module.exports;
-
-notificationsController.get = function (req, res, next) {
-	var regularFilters = [
+notificationsController.get = async function (req, res, next) {
+	const regularFilters = [
 		{ name: '[[notifications:all]]', filter: '' },
 		{ name: '[[global:topics]]', filter: 'new-topic' },
 		{ name: '[[notifications:replies]]', filter: 'new-reply' },
 		{ name: '[[notifications:chat]]', filter: 'new-chat' },
+		{ name: '[[notifications:group-chat]]', filter: 'new-group-chat' },
 		{ name: '[[notifications:follows]]', filter: 'follow' },
 		{ name: '[[notifications:upvote]]', filter: 'upvote' },
 	];
 
-	var moderatorFilters = [
+	const moderatorFilters = [
 		{ name: '[[notifications:new-flags]]', filter: 'new-post-flag' },
 		{ name: '[[notifications:my-flags]]', filter: 'my-flags' },
 		{ name: '[[notifications:bans]]', filter: 'ban' },
 	];
 
-	var filter = req.query.filter || '';
-	var page = Math.max(1, req.query.page || 1);
-	var itemsPerPage = 20;
-	var start = (page - 1) * itemsPerPage;
-	var stop = start + itemsPerPage - 1;
-	var selectedFilter;
-	var pageCount = 1;
-	var allFilters = [];
+	const filter = req.query.filter || '';
+	const page = Math.max(1, req.query.page || 1);
+	const itemsPerPage = 20;
+	const start = (page - 1) * itemsPerPage;
+	const stop = start + itemsPerPage - 1;
 
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				filters: function (next) {
-					plugins.fireHook('filter:notifications.addFilters', {
-						regularFilters: regularFilters,
-						moderatorFilters: moderatorFilters,
-						uid: req.uid,
-					}, next);
-				},
-				isPrivileged: function (next) {
-					user.isPrivileged(req.uid, next);
-				},
-			}, next);
-		},
-		function (data, _next) {
-			allFilters = data.filters.regularFilters;
+	const [filters, isPrivileged] = await Promise.all([
+		plugins.hooks.fire('filter:notifications.addFilters', {
+			regularFilters: regularFilters,
+			moderatorFilters: moderatorFilters,
+			uid: req.uid,
+		}),
+		user.isPrivileged(req.uid),
+	]);
 
-			if (data.isPrivileged) {
-				allFilters = allFilters.concat([
-					{ separator: true },
-				]).concat(data.filters.moderatorFilters);
-			}
+	let allFilters = filters.regularFilters;
+	if (isPrivileged) {
+		allFilters = allFilters.concat([
+			{ separator: true },
+		]).concat(filters.moderatorFilters);
+	}
+	const selectedFilter = allFilters.find((filterData) => {
+		filterData.selected = filterData.filter === filter;
+		return filterData.selected;
+	});
+	if (!selectedFilter) {
+		return next();
+	}
 
-			selectedFilter = allFilters.find(function (filterData) {
-				filterData.selected = filterData.filter === filter;
-				return filterData.selected;
-			});
+	const nids = await user.notifications.getAll(req.uid, selectedFilter.filter);
+	let notifications = await user.notifications.getNotifications(nids, req.uid);
 
-			if (!selectedFilter) {
-				return next();
-			}
+	const pageCount = Math.max(1, Math.ceil(notifications.length / itemsPerPage));
+	notifications = notifications.slice(start, stop + 1);
 
-			user.notifications.getAll(req.uid, selectedFilter.filter, _next);
-		},
-		function (nids, next) {
-			pageCount = Math.max(1, Math.ceil(nids.length / itemsPerPage));
-			nids = nids.slice(start, stop + 1);
-
-			user.notifications.getNotifications(nids, req.uid, next);
-		},
-		function (notifications, next) {
-			plugins.fireHook('filter:notifications.get', {
-				notifications: notifications,
-			}, function (err, data) {
-				if (err) {
-					return next(err);
-				}
-
-				next(null, data.notifications);
-			});
-		},
-		function (notifications) {
-			res.render('notifications', {
-				notifications: notifications,
-				pagination: pagination.create(page, pageCount, req.query),
-				filters: allFilters,
-				regularFilters: regularFilters,
-				moderatorFilters: moderatorFilters,
-				selectedFilter: selectedFilter,
-				title: '[[pages:notifications]]',
-				breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[pages:notifications]]' }]),
-			});
-		},
-	], next);
+	res.render('notifications', {
+		notifications: notifications,
+		pagination: pagination.create(page, pageCount, req.query),
+		filters: allFilters,
+		regularFilters: regularFilters,
+		moderatorFilters: moderatorFilters,
+		selectedFilter: selectedFilter,
+		title: '[[pages:notifications]]',
+		breadcrumbs: helpers.buildBreadcrumbs([{ text: '[[pages:notifications]]' }]),
+	});
 };

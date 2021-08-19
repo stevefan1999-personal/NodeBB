@@ -14,6 +14,10 @@
 				[[admin/settings/advanced:maintenance-mode.help]]
 			</p>
 			<div class="form-group">
+				<label for="maintenanceModeStatus">[[admin/settings/advanced:maintenance-mode.status]]</label>
+				<input class="form-control" type="text" data-field="maintenanceModeStatus">
+			</div>
+			<div class="form-group">
 				<label for="maintenanceModeMessage">[[admin/settings/advanced:maintenance-mode.message]]</label>
 				<textarea class="form-control" data-field="maintenanceModeMessage"></textarea>
 			</div>
@@ -26,8 +30,11 @@
 	<div class="col-sm-10 col-xs-12">
 		<form>
 			<div class="form-group">
-				<label for="allow-from-uri">[[admin/settings/advanced:headers.allow-from]]</label>
-				<input class="form-control" id="allow-from-uri" type="text" placeholder="external-domain.com" data-field="allow-from-uri" /><br />
+				<label for="csp-frame-ancestors">[[admin/settings/advanced:headers.csp-frame-ancestors]]</label>
+				<input class="form-control" id="csp-frame-ancestors" type="text" placeholder="https://a.example.com https://b.example.com" data-field="csp-frame-ancestors" /><br />
+				<p class="help-block">
+					[[admin/settings/advanced:headers.csp-frame-ancestors-help]]
+				</p>
 			</div>
 			<div class="form-group">
 				<label for="powered-by">[[admin/settings/advanced:headers.powered-by]]</label>
@@ -122,6 +129,56 @@
 				<p class="help-block">
 					[[admin/settings/advanced:traffic.lag-check-interval-help]]
 				</p>
+			</div>
+		</form>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/advanced:sockets.settings]]</div>
+	<div class="col-sm-10 col-xs-12">
+		<form>
+			<div class="form-group">
+				<label for="maxReconnectionAttempts">[[admin/settings/advanced:sockets.max-attempts]]</label>
+				<input class="form-control" id="maxReconnectionAttempts" type="text" value="5" placeholder="[[admin/settings/advanced:sockets.default-placeholder, 5]]" data-field="maxReconnectionAttempts" />
+			</div>
+			<div class="form-group">
+				<label for="reconnectionDelay">[[admin/settings/advanced:sockets.delay]]</label>
+				<input class="form-control" id="reconnectionDelay" type="text" value="1500" placeholder="[[admin/settings/advanced:sockets.default-placeholder, 1500]]" data-field="reconnectionDelay" />
+			</div>
+		</form>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/advanced:analytics.settings]]</div>
+	<div class="col-sm-10 col-xs-12">
+		<form>
+			<div class="form-group">
+				<label for="analytics:maxCache">[[admin/settings/advanced:analytics.max-cache]]</label>
+				<input class="form-control" id="analytics:maxCache" type="text" value="500" placeholder="500" data-field="analytics:maxCache" />
+				<p class="help-block">
+					[[admin/settings/advanced:analytics.max-cache-help]]
+				</p>
+			</div>
+		</form>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/advanced:compression.settings]]</div>
+	<div class="col-sm-10 col-xs-12">
+		<form>
+			<div class="form-group">
+				<p class="help-block">
+					[[admin/settings/advanced:compression.help]]
+				</p>
+				<div class="checkbox">
+					<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+						<input class="mdl-switch__input" type="checkbox" data-field="useCompression">
+						<span class="mdl-switch__label"><strong>[[admin/settings/advanced:compression.enable]]</strong></span>
+					</label>
+				</div>
 			</div>
 		</form>
 	</div>

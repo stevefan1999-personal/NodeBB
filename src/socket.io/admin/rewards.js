@@ -1,13 +1,13 @@
 'use strict';
 
-var rewardsAdmin = require('../../rewards/admin');
-var SocketRewards = module.exports;
+const rewardsAdmin = require('../../rewards/admin');
 
-SocketRewards.save = function (socket, data, callback) {
-	rewardsAdmin.save(data, callback);
+const SocketRewards = module.exports;
+
+SocketRewards.save = async function (socket, data) {
+	await rewardsAdmin.save(data);
 };
 
-SocketRewards.delete = function (socket, data, callback) {
-	rewardsAdmin.delete(data, callback);
+SocketRewards.delete = async function (socket, data) {
+	await rewardsAdmin.delete(data);
 };
-

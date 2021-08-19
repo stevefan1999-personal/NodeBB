@@ -1,16 +1,37 @@
 'use strict';
 
-define('forum/account/blocks', ['forum/account/header', 'autocomplete'], function (header, autocomplete) {
+define('forum/account/blocks', [
+	'forum/account/header',
+	'api',
+	'hooks',
+], function (header, api, hooks) {
 	var Blocks = {};
 
 	Blocks.init = function () {
 		header.init();
 
-		autocomplete.user($('#user-search'), function (ev, ui) {
-			app.parseAndTranslate('account/blocks', 'edit', {
-				edit: [ui.item.user],
-			}, function (html) {
-				$('.block-edit').html(html);
+		$('#user-search').on('keyup', function () {
+			var username = this.value;
+
+			api.get('/api/users', {
+				query: username,
+				searchBy: 'username',
+				paginate: false,
+			}, function (err, data) {
+				if (err) {
+					return app.alertError(err.message);
+				}
+
+				// Only show first 10 matches
+				if (data.matchCount > 10) {
+					data.users.length = 10;
+				}
+
+				app.parseAndTranslate('account/blocks', 'edit', {
+					edit: data.users,
+				}, function (html) {
+					$('.block-edit').html(html);
+				});
 			});
 		});
 
@@ -34,6 +55,7 @@ define('forum/account/blocks', ['forum/account/header', 'autocomplete'], functio
 					$('#users-container').html(html);
 					$('#users-container').siblings('div.alert')[html.length ? 'hide' : 'show']();
 				});
+				hooks.fire('action:user.blocks.toggle', { data: payload });
 			})
 			.fail(function () {
 				ajaxify.go(ajaxify.currentPage);

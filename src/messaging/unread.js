@@ -1,53 +1,39 @@
 'use strict';
 
-var async = require('async');
-
-var db = require('../database');
-var sockets = require('../socket.io');
+const db = require('../database');
+const sockets = require('../socket.io');
 
 module.exports = function (Messaging) {
-	Messaging.getUnreadCount = function (uid, callback) {
-		if (!parseInt(uid, 10)) {
-			return callback(null, 0);
+	Messaging.getUnreadCount = async (uid) => {
+		if (parseInt(uid, 10) <= 0) {
+			return 0;
 		}
-		db.sortedSetCard('uid:' + uid + ':chat:rooms:unread', callback);
+
+		return await db.sortedSetCard(`uid:${uid}:chat:rooms:unread`);
 	};
 
-	Messaging.pushUnreadCount = function (uid) {
-		if (!parseInt(uid, 10)) {
+	Messaging.pushUnreadCount = async (uid) => {
+		if (parseInt(uid, 10) <= 0) {
 			return;
 		}
-		Messaging.getUnreadCount(uid, function (err, unreadCount) {
-			if (err) {
-				return;
-			}
-			sockets.in('uid_' + uid).emit('event:unread.updateChatCount', unreadCount);
-		});
+		const unreadCount = await Messaging.getUnreadCount(uid);
+		sockets.in(`uid_${uid}`).emit('event:unread.updateChatCount', unreadCount);
 	};
 
-	Messaging.markRead = function (uid, roomId, callback) {
-		db.sortedSetRemove('uid:' + uid + ':chat:rooms:unread', roomId, callback);
+	Messaging.markRead = async (uid, roomId) => {
+		await db.sortedSetRemove(`uid:${uid}:chat:rooms:unread`, roomId);
 	};
 
-	Messaging.markAllRead = function (uid, callback) {
-		db.delete('uid:' + uid + ':chat:rooms:unread', callback);
+	Messaging.markAllRead = async (uid) => {
+		await db.delete(`uid:${uid}:chat:rooms:unread`);
 	};
 
-	Messaging.markUnread = function (uids, roomId, callback) {
-		async.waterfall([
-			function (next) {
-				Messaging.roomExists(roomId, next);
-			},
-			function (exists, next) {
-				if (!exists) {
-					return next(new Error('[[error:chat-room-does-not-exist]]'));
-				}
-				var keys = uids.map(function (uid) {
-					return 'uid:' + uid + ':chat:rooms:unread';
-				});
-
-				db.sortedSetsAdd(keys, Date.now(), roomId, next);
-			},
-		], callback);
+	Messaging.markUnread = async (uids, roomId) => {
+		const exists = await Messaging.roomExists(roomId);
+		if (!exists) {
+			return;
+		}
+		const keys = uids.map(uid => `uid:${uid}:chat:rooms:unread`);
+		return await db.sortedSetsAdd(keys, Date.now(), roomId);
 	};
 };

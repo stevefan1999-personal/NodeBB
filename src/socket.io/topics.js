@@ -1,16 +1,13 @@
 'use strict';
 
-var async = require('async');
+const api = require('../api');
+const topics = require('../topics');
+const user = require('../user');
+const meta = require('../meta');
+const privileges = require('../privileges');
+const sockets = require('.');
 
-var topics = require('../topics');
-var posts = require('../posts');
-var websockets = require('./index');
-var user = require('../user');
-var meta = require('../meta');
-var apiController = require('../controllers/api');
-var socketHelpers = require('./helpers');
-
-var SocketTopics = module.exports;
+const SocketTopics = module.exports;
 
 require('./topics/unread')(SocketTopics);
 require('./topics/move')(SocketTopics);
@@ -19,118 +16,87 @@ require('./topics/infinitescroll')(SocketTopics);
 require('./topics/tags')(SocketTopics);
 require('./topics/merge')(SocketTopics);
 
-SocketTopics.post = function (socket, data, callback) {
-	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+SocketTopics.post = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'POST /api/v3/topics');
+	return await api.topics.create(socket, data);
+};
+
+SocketTopics.postcount = async function (socket, tid) {
+	const canRead = await privileges.topics.can('topics:read', tid, socket.uid);
+	if (!canRead) {
+		throw new Error('[[no-privileges]]');
 	}
-
-	data.uid = socket.uid;
-	data.req = websockets.reqFromSocket(socket);
-	data.timestamp = Date.now();
-
-	async.waterfall([
-		function (next) {
-			meta.blacklist.test(data.req.ip, next);
-		},
-		function (next) {
-			posts.shouldQueue(socket.uid, data, next);
-		},
-		function (shouldQueue, next) {
-			if (shouldQueue) {
-				posts.addToQueue(data, next);
-			} else {
-				postTopic(socket, data, next);
-			}
-		},
-	], callback);
+	return await topics.getTopicField(tid, 'postcount');
 };
 
-function postTopic(socket, data, callback) {
-	async.waterfall([
-		function (next) {
-			topics.post(data, next);
-		},
-		function (result, next) {
-			next(null, result.topicData);
-
-			socket.emit('event:new_post', { posts: [result.postData] });
-			socket.emit('event:new_topic', result.topicData);
-
-			socketHelpers.notifyNew(socket.uid, 'newTopic', { posts: [result.postData], topic: result.topicData });
-		},
-	], callback);
-}
-
-SocketTopics.postcount = function (socket, tid, callback) {
-	topics.getTopicField(tid, 'postcount', callback);
-};
-
-SocketTopics.bookmark = function (socket, data, callback) {
+SocketTopics.bookmark = async function (socket, data) {
 	if (!socket.uid || !data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
-	topics.setUserBookmark(data.tid, socket.uid, data.index, callback);
+	const postcount = await topics.getTopicField(data.tid, 'postcount');
+	if (data.index > meta.config.bookmarkThreshold && postcount > meta.config.bookmarkThreshold) {
+		await topics.setUserBookmark(data.tid, socket.uid, data.index);
+	}
 };
 
-SocketTopics.createTopicFromPosts = function (socket, data, callback) {
+SocketTopics.createTopicFromPosts = async function (socket, data) {
 	if (!socket.uid) {
-		return callback(new Error('[[error:not-logged-in]]'));
+		throw new Error('[[error:not-logged-in]]');
 	}
 
 	if (!data || !data.title || !data.pids || !Array.isArray(data.pids)) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
 
-	topics.createTopicFromPosts(socket.uid, data.title, data.pids, data.fromTid, callback);
+	return await topics.createTopicFromPosts(socket.uid, data.title, data.pids, data.fromTid);
 };
 
-SocketTopics.changeWatching = function (socket, data, callback) {
+SocketTopics.changeWatching = async function (socket, data) {
 	if (!data || !data.tid || !data.type) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
-	var commands = ['follow', 'unfollow', 'ignore'];
-	if (commands.indexOf(data.type) === -1) {
-		return callback(new Error('[[error:invalid-command]]'));
+	const commands = ['follow', 'unfollow', 'ignore'];
+	if (!commands.includes(data.type)) {
+		throw new Error('[[error:invalid-command]]');
 	}
-	followCommand(topics[data.type], socket, data.tid, callback);
+
+	sockets.warnDeprecated(socket, 'PUT/DELETE /api/v3/topics/:tid/(follow|ignore)');
+	await followCommand(data.type, socket, data.tid);
 };
 
-SocketTopics.follow = function (socket, tid, callback) {
-	followCommand(topics.follow, socket, tid, callback);
+SocketTopics.follow = async function (socket, tid) {
+	sockets.warnDeprecated(socket, 'PUT /api/v3/topics/:tid/follow');
+	await followCommand('follow', socket, tid);
 };
 
-function followCommand(method, socket, tid, callback) {
+async function followCommand(method, socket, tid) {
 	if (!socket.uid) {
-		return callback(new Error('[[error:not-logged-in]]'));
+		throw new Error('[[error:not-logged-in]]');
 	}
 
-	method(tid, socket.uid, callback);
+	await api.topics[method](socket, { tid });
 }
 
-SocketTopics.isFollowed = function (socket, tid, callback) {
-	topics.isFollowing([tid], socket.uid, function (err, isFollowing) {
-		callback(err, Array.isArray(isFollowing) && isFollowing.length ? isFollowing[0] : false);
-	});
+SocketTopics.isFollowed = async function (socket, tid) {
+	const isFollowing = await topics.isFollowing([tid], socket.uid);
+	return isFollowing[0];
 };
 
-SocketTopics.search = function (socket, data, callback) {
+SocketTopics.search = async function (socket, data) {
 	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
-	topics.search(data.tid, data.term, callback);
+	return await topics.search(data.tid, data.term);
 };
 
-SocketTopics.isModerator = function (socket, tid, callback) {
-	async.waterfall([
-		function (next) {
-			topics.getTopicField(tid, 'cid', next);
-		},
-		function (cid, next) {
-			user.isModerator(socket.uid, cid, next);
-		},
-	], callback);
+SocketTopics.isModerator = async function (socket, tid) {
+	const cid = await topics.getTopicField(tid, 'cid');
+	return await user.isModerator(socket.uid, cid);
 };
 
-SocketTopics.getTopic = function (socket, tid, callback) {
-	apiController.getTopicData(tid, socket.uid, callback);
+SocketTopics.getTopic = async function (socket, tid) {
+	sockets.warnDeprecated(socket, 'GET /api/v3/topics/:tid');
+	return await api.topics.get(socket, { tid });
 };
+
+require('../promisify')(SocketTopics);

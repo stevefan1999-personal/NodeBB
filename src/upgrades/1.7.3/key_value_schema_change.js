@@ -1,29 +1,29 @@
 'use strict';
 
-var async = require('async');
+const async = require('async');
 
-var db = require('../../database');
+const db = require('../../database');
 
 module.exports = {
 	name: 'Change the schema of simple keys so they don\'t use value field (mongodb only)',
 	timestamp: Date.UTC(2017, 11, 18),
 	method: function (callback) {
-		var configJSON;
+		let configJSON;
 		try {
 			configJSON = require('../../../config.json') || { [process.env.database]: true, database: process.env.database };
 		} catch (err) {
 			configJSON = { [process.env.database]: true, database: process.env.database };
 		}
-		var isMongo = configJSON.hasOwnProperty('mongo') && configJSON.database === 'mongo';
-		var progress = this.progress;
+		const isMongo = configJSON.hasOwnProperty('mongo') && configJSON.database === 'mongo';
+		const { progress } = this;
 		if (!isMongo) {
 			return callback();
 		}
-		var client = db.client;
-		var cursor;
+		const { client } = db;
+		let cursor;
 		async.waterfall([
 			function (next) {
-				client.collection('objects').count({
+				client.collection('objects').countDocuments({
 					_key: { $exists: true },
 					value: { $exists: true },
 					score: { $exists: false },
@@ -37,12 +37,12 @@ module.exports = {
 					score: { $exists: false },
 				}).batchSize(1000);
 
-				var done = false;
+				let done = false;
 				async.whilst(
-					function () {
-						return !done;
+					(next) => {
+						next(null, !done);
 					},
-					function (next) {
+					(next) => {
 						async.waterfall([
 							function (next) {
 								cursor.next(next);
@@ -55,12 +55,12 @@ module.exports = {
 								}
 								delete item.expireAt;
 								if (Object.keys(item).length === 3 && item.hasOwnProperty('_key') && item.hasOwnProperty('value')) {
-									client.collection('objects').update({ _key: item._key }, { $rename: { value: 'data' } }, next);
+									client.collection('objects').updateOne({ _key: item._key }, { $rename: { value: 'data' } }, next);
 								} else {
 									next();
 								}
 							},
-						], function (err) {
+						], (err) => {
 							next(err);
 						});
 					},

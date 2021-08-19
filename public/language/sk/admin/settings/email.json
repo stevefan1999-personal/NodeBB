@@ -22,6 +22,8 @@
 	"smtp-transport.username": "Používateľské meno",
 	"smtp-transport.username-help": "<b>For the Gmail service,</b> enter the full email address here, especially if you are using a Google Apps managed domain.",
 	"smtp-transport.password": "Heslo",
+	"smtp-transport.pool": "Enable pooled connections",
+	"smtp-transport.pool-help": "Pooling connections prevents NodeBB from creating a new connection for every email. This option only applies if SMTP Transport is enabled.",
 
 	"template": "Upraviť šablónu e-mailu",
 	"template.select": "Vybrať šablónu e-mailu",
@@ -30,8 +32,11 @@
 	"testing.select": "Vyberte šablónu e-mailu",
 	"testing.send": "Odoslať skúšobný e-mail",
 	"testing.send-help": "Skúšobný e-mail bude odoslaný aktuálne prihlásenému používateľovi na jeho e-mailovú adresu z registrácie.",
-	"subscriptions": "Email Subscriptions",
-	"subscriptions.disable": "Disable subscriber notification emails",
+	"subscriptions": "Email Digests",
+	"subscriptions.disable": "Disable email digests",
 	"subscriptions.hour": "Digest Hour",
-	"subscriptions.hour-help": "Please enter a number representing the hour to send scheduled email digests (e.g. <code>0</code> for midnight, <code>17</code> for 5:00pm). Keep in mind that this is the hour according to the server itself, and may not exactly match your system clock.<br /> The approximate server time is: <span id=\"serverTime\"></span><br /> The next daily digest is scheduled to be sent  <span id=\"nextDigestTime\"></span>"
+	"subscriptions.hour-help": "Please enter a number representing the hour to send scheduled email digests (e.g. <code>0</code> for midnight, <code>17</code> for 5:00pm). Keep in mind that this is the hour according to the server itself, and may not exactly match your system clock.<br /> The approximate server time is: <span id=\"serverTime\"></span><br /> The next daily digest is scheduled to be sent  <span id=\"nextDigestTime\"></span>",
+	"notifications.remove-images": "Remove images from email notifications",
+	"include-unverified-emails": "Send emails to recipients who have not explicitly confirmed their emails",
+	"include-unverified-warning": "By default, users with emails associated with their account have already been verified, but there are situations where this is not the case (e.g. SSO logins, grandfathered users, etc). <strong>Enable this setting at your own risk</strong> &ndash; sending emails to unverified addresses may be a violation of regional anti-spam laws."
 }

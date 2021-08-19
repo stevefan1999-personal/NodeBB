@@ -17,6 +17,7 @@
     "at-most": "Selebihnya",
     "relevance": "Relevance",
     "post-time": "Masa kiriman",
+    "votes": "Votes",
     "newer-than": "Baru daripada",
     "older-than": "Lama daripada",
     "any-date": "Mana-mana masa",
@@ -30,6 +31,7 @@
     "sort-by": "Susun mengikut",
     "last-reply-time": "Masa balasan terakhir",
     "topic-title": "Tajuk topik",
+    "topic-votes": "Topic votes",
     "number-of-replies": "Jumlah dibalas",
     "number-of-views": "Jumlah dilihat",
     "topic-start-date": "Tarikh topik mula",
@@ -41,5 +43,7 @@
     "clear-preferences": "Bersihkan butiran",
     "search-preferences-saved": "Cari butiran yang disimpan",
     "search-preferences-cleared": "Cari butiran yang diersihkan",
-    "show-results-as": "Tunjuk hasil sebagai"
+    "show-results-as": "Tunjuk hasil sebagai",
+    "see-more-results": "See more results (%1)",
+    "search-in-category": "Search in \"%1\""
 }

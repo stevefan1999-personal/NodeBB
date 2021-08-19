@@ -1,19 +1,18 @@
 'use strict';
 
-var db = require('../database');
+const db = require('../database');
 
 module.exports = function (Topics) {
-	Topics.isOwner = function (tid, uid, callback) {
+	Topics.isOwner = async function (tid, uid) {
 		uid = parseInt(uid, 10);
-		if (!uid) {
-			return callback(null, false);
+		if (uid <= 0) {
+			return false;
 		}
-		Topics.getTopicField(tid, 'uid', function (err, author) {
-			callback(err, parseInt(author, 10) === uid);
-		});
+		const author = await Topics.getTopicField(tid, 'uid');
+		return author === uid;
 	};
 
-	Topics.getUids = function (tid, callback) {
-		db.getSortedSetRevRangeByScore('tid:' + tid + ':posters', 0, -1, '+inf', 1, callback);
+	Topics.getUids = async function (tid) {
+		return await db.getSortedSetRevRangeByScore(`tid:${tid}:posters`, 0, -1, '+inf', 1);
 	};
 };

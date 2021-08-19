@@ -3,14 +3,12 @@
 define('admin/manage/category', [
 	'uploader',
 	'iconSelect',
-	'admin/modules/colorpicker',
-	'autocomplete',
-	'translator',
 	'categorySelector',
 	'benchpress',
-], function (uploader, iconSelect, colorpicker, autocomplete, translator, categorySelector, Benchpress) {
+	'api',
+], function (uploader, iconSelect, categorySelector, Benchpress, api) {
 	var	Category = {};
-	var modified_categories = {};
+	var updateHash = {};
 
 	Category.init = function () {
 		$('#category-settings select').each(function () {
@@ -18,73 +16,63 @@ define('admin/manage/category', [
 			$this.val($this.attr('data-value'));
 		});
 
-		$('#category-selector').on('change', function () {
-			ajaxify.go('admin/manage/categories/' + $(this).val() + window.location.hash);
+		categorySelector.init($('[component="category-selector"]'), {
+			onSelect: function (selectedCategory) {
+				ajaxify.go('admin/manage/categories/' + selectedCategory.cid);
+			},
+			showLinks: true,
 		});
-
-		function enableColorPicker(idx, inputEl) {
-			var $inputEl = $(inputEl);
-			var previewEl = $inputEl.parents('[data-cid]').find('.category-preview');
-
-			colorpicker.enable($inputEl, function (hsb, hex) {
-				if ($inputEl.attr('data-name') === 'bgColor') {
-					previewEl.css('background-color', '#' + hex);
-				} else if ($inputEl.attr('data-name') === 'color') {
-					previewEl.css('color', '#' + hex);
-				}
-
-				modified($inputEl[0]);
-			});
-		}
 
 		handleTags();
 
-		$('#category-settings input, #category-settings select').not($('.privilege-table-container input'))
-			.on('change', function (ev) {
-				modified(ev.target);
-			})
-			.on('keydown', function (ev) {
-				if (ev.which === 13) {
-					ev.preventDefault();
-					return false;
-				}
-			});
+		$('#category-settings input, #category-settings select, #category-settings textarea').on('change', function (ev) {
+			modified(ev.target);
+		});
 
 		$('[data-name="imageClass"]').on('change', function () {
 			$('.category-preview').css('background-size', $(this).val());
 		});
 
-		$('[data-name="bgColor"], [data-name="color"]').each(enableColorPicker);
+		$('[data-name="bgColor"], [data-name="color"]').on('input', function () {
+			var $inputEl = $(this);
+			var previewEl = $inputEl.parents('[data-cid]').find('.category-preview');
+			if ($inputEl.attr('data-name') === 'bgColor') {
+				previewEl.css('background-color', $inputEl.val());
+			} else if ($inputEl.attr('data-name') === 'color') {
+				previewEl.css('color', $inputEl.val());
+			}
+
+			modified($inputEl[0]);
+		});
 
 		$('#save').on('click', function () {
-			if (Object.keys(modified_categories).length) {
-				socket.emit('admin.categories.update', modified_categories, function (err, result) {
-					if (err) {
-						return app.alertError(err.message);
-					}
-
-					if (result && result.length) {
-						app.flags._unsaved = false;
-						app.alert({
-							title: 'Updated Categories',
-							message: 'Category IDs ' + result.join(', ') + ' was successfully updated.',
-							type: 'success',
-							timeout: 2000,
-						});
-					}
-				});
-				modified_categories = {};
+			var tags = $('#tag-whitelist').val() ? $('#tag-whitelist').val().split(',') : [];
+			if (tags.length && tags.length < parseInt($('#cid-min-tags').val(), 10)) {
+				return app.alertError('[[admin/manage/categories:alert.not-enough-whitelisted-tags]]');
 			}
+
+			var cid = ajaxify.data.category.cid;
+			api.put('/categories/' + cid, updateHash).then((res) => {
+				app.flags._unsaved = false;
+				app.alert({
+					title: 'Updated Categories',
+					message: 'Category "' + res.name + '" was successfully updated.',
+					type: 'success',
+					timeout: 5000,
+				});
+				updateHash = {};
+			}).catch(app.alertError);
+
 			return false;
 		});
 
 		$('.purge').on('click', function (e) {
 			e.preventDefault();
 
-			Benchpress.parse('admin/partials/categories/purge', {
+			Benchpress.render('admin/partials/categories/purge', {
 				name: ajaxify.data.category.name,
 				topic_count: ajaxify.data.category.topic_count,
-			}, function (html) {
+			}).then(function (html) {
 				var modal = bootbox.dialog({
 					title: '[[admin/manage/categories:purge]]',
 					message: html,
@@ -111,18 +99,14 @@ define('admin/manage/category', [
 									});
 								}, 1000);
 
-								socket.emit('admin.categories.purge', ajaxify.data.category.cid, function (err) {
-									if (err) {
-										return app.alertError(err.message);
-									}
-
+								api.del('/categories/' + ajaxify.data.category.cid).then(() => {
 									if (intervalId) {
 										clearInterval(intervalId);
 									}
 									modal.modal('hide');
 									app.alertSuccess('[[admin/manage/categories:alert.purge-success]]');
 									ajaxify.go('admin/manage/categories');
-								});
+								}).catch(app.alertError);
 
 								return false;
 							},
@@ -133,13 +117,47 @@ define('admin/manage/category', [
 		});
 
 		$('.copy-settings').on('click', function () {
-			categorySelector.modal(function (cid) {
-				socket.emit('admin.categories.copySettingsFrom', { fromCid: cid, toCid: ajaxify.data.category.cid }, function (err) {
-					if (err) {
-						return app.alertError(err.message);
-					}
-					app.alertSuccess('[[admin/manage/categories:alert.copy-success]]');
-					ajaxify.refresh();
+			Benchpress.render('admin/partials/categories/copy-settings', {}).then(function (html) {
+				var selectedCid;
+				var modal = bootbox.dialog({
+					title: '[[modules:composer.select_category]]',
+					message: html,
+					buttons: {
+						save: {
+							label: '[[modules:bootbox.confirm]]',
+							className: 'btn-primary',
+							callback: function () {
+								if (!selectedCid || parseInt(selectedCid, 10) === parseInt(ajaxify.data.category.cid, 10)) {
+									return;
+								}
+
+								socket.emit('admin.categories.copySettingsFrom', {
+									fromCid: selectedCid,
+									toCid: ajaxify.data.category.cid,
+									copyParent: modal.find('#copyParent').prop('checked'),
+								}, function (err) {
+									if (err) {
+										return app.alertError(err.message);
+									}
+
+									modal.modal('hide');
+									app.alertSuccess('[[admin/manage/categories:alert.copy-success]]');
+									ajaxify.refresh();
+								});
+								return false;
+							},
+						},
+					},
+				});
+				modal.find('.modal-footer button').prop('disabled', true);
+				categorySelector.init(modal.find('[component="category-selector"]'), {
+					onSelect: function (selectedCategory) {
+						selectedCid = selectedCategory && selectedCategory.cid;
+						if (selectedCid) {
+							modal.find('.modal-footer button').prop('disabled', false);
+						}
+					},
+					showLinks: true,
 				});
 			});
 			return false;
@@ -164,6 +182,7 @@ define('admin/manage/category', [
 
 		$('#category-image').on('change', function () {
 			$('.category-preview').css('background-image', $(this).val() ? ('url("' + $(this).val() + '")') : '');
+			modified($('#category-image'));
 		});
 
 		$('.delete-image').on('click', function (e) {
@@ -188,39 +207,58 @@ define('admin/manage/category', [
 
 		$('button[data-action="setParent"], button[data-action="changeParent"]').on('click', Category.launchParentSelector);
 		$('button[data-action="removeParent"]').on('click', function () {
-			var payload = {};
-			payload[ajaxify.data.category.cid] = {
+			api.put('/categories/' + ajaxify.data.category.cid, {
 				parentCid: 0,
-			};
-
-			socket.emit('admin.categories.update', payload, function (err) {
-				if (err) {
-					return app.alertError(err.message);
-				}
+			}).then(() => {
 				$('button[data-action="removeParent"]').parent().addClass('hide');
 				$('button[data-action="changeParent"]').parent().addClass('hide');
 				$('button[data-action="setParent"]').removeClass('hide');
-			});
+			}).catch(app.alertError);
+		});
+		$('button[data-action="toggle"]').on('click', function () {
+			var $this = $(this);
+			var disabled = $this.attr('data-disabled') === '1';
+			api.put('/categories/' + ajaxify.data.category.cid, {
+				disabled: disabled ? 0 : 1,
+			}).then(() => {
+				$this.translateText(!disabled ? '[[admin/manage/categories:enable]]' : '[[admin/manage/categories:disable]]');
+				$this.toggleClass('btn-primary', !disabled).toggleClass('btn-danger', disabled);
+				$this.attr('data-disabled', disabled ? 0 : 1);
+			}).catch(app.alertError);
 		});
 	};
 
 	function modified(el) {
-		var cid = ajaxify.data.category.cid;
-
-		if (cid) {
-			var value;
-			if ($(el).is(':checkbox')) {
-				value = $(el).is(':checked') ? 1 : 0;
-			} else {
-				value = $(el).val();
-			}
-
-			modified_categories[cid] = modified_categories[cid] || {};
-			modified_categories[cid][$(el).attr('data-name')] = value;
-
-			app.flags = app.flags || {};
-			app.flags._unsaved = true;
+		var value;
+		if ($(el).is(':checkbox')) {
+			value = $(el).is(':checked') ? 1 : 0;
+		} else {
+			value = $(el).val();
 		}
+		var dataName = $(el).attr('data-name');
+		var fields = dataName.match(/[^\][.]+/g);
+
+		function setNestedFields(obj, index) {
+			if (index === fields.length) {
+				return;
+			}
+			obj[fields[index]] = obj[fields[index]] || {};
+			if (index === fields.length - 1) {
+				obj[fields[index]] = value;
+			}
+			setNestedFields(obj[fields[index]], index + 1);
+		}
+
+		if (fields && fields.length) {
+			if (fields.length === 1) { // simple field name ie data-name="name"
+				updateHash[fields[0]] = value;
+			} else if (fields.length > 1) { // nested field name ie data-name="name[sub1][sub2]"
+				setNestedFields(updateHash, 0);
+			}
+		}
+
+		app.flags = app.flags || {};
+		app.flags._unsaved = true;
 	}
 
 	function handleTags() {
@@ -240,31 +278,27 @@ define('admin/manage/category', [
 	}
 
 	Category.launchParentSelector = function () {
-		var categories = ajaxify.data.allCategories.filter(function (category) {
-			return category && !category.disabled && parseInt(category.cid, 10) !== parseInt(ajaxify.data.category.cid, 10);
-		});
-
-		categorySelector.modal(categories, function (parentCid) {
-			var payload = {};
-
-			payload[ajaxify.data.category.cid] = {
-				parentCid: parentCid,
-			};
-
-			socket.emit('admin.categories.update', payload, function (err) {
-				if (err) {
-					return app.alertError(err.message);
+		categorySelector.modal({
+			onSubmit: function (selectedCategory) {
+				var parentCid = selectedCategory.cid;
+				if (!parentCid) {
+					return;
 				}
-				var parent = ajaxify.data.allCategories.filter(function (category) {
-					return category && parseInt(category.cid, 10) === parseInt(parentCid, 10);
-				});
-				parent = parent[0];
+				api.put('/categories/' + ajaxify.data.category.cid, {
+					parentCid: parentCid,
+				}).then(() => {
+					api.get(`/categories/${parentCid}`, {}).then(function (parent) {
+						if (parent && parent.icon && parent.name) {
+							var buttonHtml = '<i class="fa ' + parent.icon + '"></i> ' + parent.name;
+							$('button[data-action="changeParent"]').html(buttonHtml).parent().removeClass('hide');
+						}
+					});
 
-				$('button[data-action="removeParent"]').parent().removeClass('hide');
-				$('button[data-action="setParent"]').addClass('hide');
-				var buttonHtml = '<i class="fa ' + parent.icon + '"></i> ' + parent.name;
-				$('button[data-action="changeParent"]').html(buttonHtml).parent().removeClass('hide');
-			});
+					$('button[data-action="removeParent"]').parent().removeClass('hide');
+					$('button[data-action="setParent"]').addClass('hide');
+				}).catch(app.alertError);
+			},
+			showLinks: true,
 		});
 	};
 

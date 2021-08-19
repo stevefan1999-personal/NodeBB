@@ -1,514 +1,523 @@
 
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
+const async = require('async');
+const validator = require('validator');
+const _ = require('lodash');
 
-var db = require('../database');
-var meta = require('../meta');
-var _ = require('lodash');
-var plugins = require('../plugins');
-var utils = require('../utils');
-var batch = require('../batch');
+const db = require('../database');
+const meta = require('../meta');
+const user = require('../user');
+const categories = require('../categories');
+const plugins = require('../plugins');
+const utils = require('../utils');
+const batch = require('../batch');
+const cache = require('../cache');
 
 module.exports = function (Topics) {
-	Topics.createTags = function (tags, tid, timestamp, callback) {
-		callback = callback || function () {};
-
+	Topics.createTags = async function (tags, tid, timestamp) {
 		if (!Array.isArray(tags) || !tags.length) {
-			return callback();
+			return;
 		}
 
-		async.waterfall([
-			function (next) {
-				plugins.fireHook('filter:tags.filter', { tags: tags, tid: tid }, next);
-			},
-			function (data, next) {
-				tags = _.uniq(data.tags);
-				tags = tags.slice(0, meta.config.maximumTagsPerTopic || 5);
-				tags = tags.map(function (tag) {
-					return utils.cleanUpTag(tag, meta.config.maximumTagLength);
-				}).filter(function (tag) {
-					return tag && tag.length >= (meta.config.minimumTagLength || 3);
-				});
-
-				filterCategoryTags(tags, tid, next);
-			},
-			function (_tags, next) {
-				tags = _tags;
-				var keys = tags.map(function (tag) {
-					return 'tag:' + tag + ':topics';
-				});
-
-				async.parallel([
-					async.apply(db.setAdd, 'topic:' + tid + ':tags', tags),
-					async.apply(db.sortedSetsAdd, keys, timestamp, tid),
-				], function (err) {
-					next(err);
-				});
-			},
-			function (next) {
-				async.each(tags, updateTagCount, next);
-			},
-		], callback);
+		const cid = await Topics.getTopicField(tid, 'cid');
+		const topicSets = tags.map(tag => `tag:${tag}:topics`).concat(
+			tags.map(tag => `cid:${cid}:tag:${tag}:topics`)
+		);
+		await db.sortedSetsAdd(topicSets, timestamp, tid);
+		await Topics.updateCategoryTagsCount([cid], tags);
+		await Promise.all(tags.map(updateTagCount));
 	};
 
-	function filterCategoryTags(tags, tid, callback) {
-		async.waterfall([
-			function (next) {
-				Topics.getTopicField(tid, 'cid', next);
-			},
-			function (cid, next) {
-				db.getSortedSetRange('cid:' + cid + ':tag:whitelist', 0, -1, next);
-			},
-			function (tagWhitelist, next) {
-				if (!tagWhitelist.length) {
-					return next(null, tags);
-				}
-				tags = tags.filter(function (tag) {
-					return tagWhitelist.indexOf(tag) !== -1;
-				});
-				next(null, tags);
-			},
-		], callback);
+	Topics.filterTags = async function (tags, cid) {
+		const result = await plugins.hooks.fire('filter:tags.filter', { tags: tags, cid: cid });
+		tags = _.uniq(result.tags)
+			.map(tag => utils.cleanUpTag(tag, meta.config.maximumTagLength))
+			.filter(tag => tag && tag.length >= (meta.config.minimumTagLength || 3));
+
+		return await filterCategoryTags(tags, cid);
+	};
+
+	Topics.updateCategoryTagsCount = async function (cids, tags) {
+		await Promise.all(cids.map(async (cid) => {
+			const counts = await db.sortedSetsCard(
+				tags.map(tag => `cid:${cid}:tag:${tag}:topics`)
+			);
+			const tagToCount = _.zipObject(tags, counts);
+			const set = `cid:${cid}:tags`;
+
+			const bulkAdd = tags.filter(tag => tagToCount[tag] > 0)
+				.map(tag => [set, tagToCount[tag], tag]);
+
+			const bulkRemove = tags.filter(tag => tagToCount[tag] <= 0)
+				.map(tag => [set, tag]);
+
+			await Promise.all([
+				db.sortedSetAddBulk(bulkAdd),
+				db.sortedSetRemoveBulk(bulkRemove),
+			]);
+		}));
+
+		await db.sortedSetsRemoveRangeByScore(
+			cids.map(cid => `cid:${cid}:tags`), '-inf', 0
+		);
+	};
+
+	Topics.validateTags = async function (tags, cid, uid, tid = null) {
+		if (!Array.isArray(tags)) {
+			throw new Error('[[error:invalid-data]]');
+		}
+		tags = _.uniq(tags);
+		const [categoryData, isPrivileged, currentTags] = await Promise.all([
+			categories.getCategoryFields(cid, ['minTags', 'maxTags']),
+			user.isPrivileged(uid),
+			tid ? Topics.getTopicTags(tid) : [],
+		]);
+		if (tags.length < parseInt(categoryData.minTags, 10)) {
+			throw new Error(`[[error:not-enough-tags, ${categoryData.minTags}]]`);
+		} else if (tags.length > parseInt(categoryData.maxTags, 10)) {
+			throw new Error(`[[error:too-many-tags, ${categoryData.maxTags}]]`);
+		}
+
+		const addedTags = tags.filter(tag => !currentTags.includes(tag));
+		const removedTags = currentTags.filter(tag => !tags.includes(tag));
+		const systemTags = (meta.config.systemTags || '').split(',');
+
+		if (!isPrivileged && systemTags.length && addedTags.length && addedTags.some(tag => systemTags.includes(tag))) {
+			throw new Error('[[error:cant-use-system-tag]]');
+		}
+
+		if (!isPrivileged && systemTags.length && removedTags.length && removedTags.some(tag => systemTags.includes(tag))) {
+			throw new Error('[[error:cant-remove-system-tag]]');
+		}
+	};
+
+	async function filterCategoryTags(tags, cid) {
+		const tagWhitelist = await categories.getTagWhitelist([cid]);
+		if (!Array.isArray(tagWhitelist[0]) || !tagWhitelist[0].length) {
+			return tags;
+		}
+		const whitelistSet = new Set(tagWhitelist[0]);
+		return tags.filter(tag => whitelistSet.has(tag));
 	}
 
-	Topics.createEmptyTag = function (tag, callback) {
+	Topics.createEmptyTag = async function (tag) {
 		if (!tag) {
-			return callback(new Error('[[error:invalid-tag]]'));
+			throw new Error('[[error:invalid-tag]]');
 		}
-
-		tag = utils.cleanUpTag(tag, meta.config.maximumTagLength);
 		if (tag.length < (meta.config.minimumTagLength || 3)) {
-			return callback(new Error('[[error:tag-too-short]]'));
+			throw new Error('[[error:tag-too-short]]');
 		}
-
-		async.waterfall([
-			function (next) {
-				db.isSortedSetMember('tags:topic:count', tag, next);
-			},
-			function (isMember, next) {
-				if (isMember) {
-					return next();
-				}
-				db.sortedSetAdd('tags:topic:count', 0, tag, next);
-			},
-		], callback);
+		const isMember = await db.isSortedSetMember('tags:topic:count', tag);
+		if (!isMember) {
+			await db.sortedSetAdd('tags:topic:count', 0, tag);
+			cache.del('tags:topic:count');
+		}
 	};
 
-	Topics.updateTags = function (data, callback) {
-		async.eachSeries(data, function (tagData, next) {
-			db.setObject('tag:' + tagData.value, {
-				color: tagData.color,
-				bgColor: tagData.bgColor,
-			}, next);
-		}, callback);
+	Topics.renameTags = async function (data) {
+		await async.eachSeries(data, async (tagData) => {
+			await renameTag(tagData.value, tagData.newName);
+		});
 	};
 
-	Topics.renameTags = function (data, callback) {
-		async.eachSeries(data, function (tagData, next) {
-			renameTag(tagData.value, tagData.newName, next);
-		}, callback);
-	};
-
-	function renameTag(tag, newTagName, callback) {
+	async function renameTag(tag, newTagName) {
 		if (!newTagName || tag === newTagName) {
-			return setImmediate(callback);
+			return;
 		}
-		async.waterfall([
-			function (next) {
-				Topics.createEmptyTag(newTagName, next);
-			},
-			function (next) {
-				batch.processSortedSet('tag:' + tag + ':topics', function (tids, next) {
-					async.waterfall([
-						function (next) {
-							db.sortedSetScores('tag:' + tag + ':topics', tids, next);
-						},
-						function (scores, next) {
-							db.sortedSetAdd('tag:' + newTagName + ':topics', scores, tids, next);
-						},
-						function (next) {
-							var keys = tids.map(function (tid) {
-								return 'topic:' + tid + ':tags';
-							});
+		newTagName = utils.cleanUpTag(newTagName, meta.config.maximumTagLength);
 
-							async.series([
-								async.apply(db.sortedSetRemove, 'tag:' + tag + ':topics', tids),
-								async.apply(db.setsRemove, keys, tag),
-								async.apply(db.setsAdd, keys, newTagName),
-							], next);
-						},
-					], next);
-				}, next);
-			},
-			function (next) {
-				Topics.deleteTag(tag, next);
-			},
-			function (next) {
-				updateTagCount(newTagName, next);
-			},
-		], callback);
-	}
+		await Topics.createEmptyTag(newTagName);
+		const allCids = {};
 
-	function updateTagCount(tag, callback) {
-		callback = callback || function () {};
-		async.waterfall([
-			function (next) {
-				Topics.getTagTopicCount(tag, next);
-			},
-			function (count, next) {
-				count = count || 0;
+		await batch.processSortedSet(`tag:${tag}:topics`, async (tids) => {
+			const topicData = await Topics.getTopicsFields(tids, ['tid', 'cid', 'tags']);
+			const cids = topicData.map(t => t.cid);
+			topicData.forEach((t) => { allCids[t.cid] = true; });
+			const scores = await db.sortedSetScores(`tag:${tag}:topics`, tids);
+			// update tag:<tag>:topics
+			await db.sortedSetAdd(`tag:${newTagName}:topics`, scores, tids);
+			await db.sortedSetRemove(`tag:${tag}:topics`, tids);
 
-				db.sortedSetAdd('tags:topic:count', count, tag, next);
-			},
-		], callback);
-	}
+			// update cid:<cid>:tag:<tag>:topics
+			await db.sortedSetAddBulk(topicData.map(
+				(t, index) => [`cid:${t.cid}:tag:${newTagName}:topics`, scores[index], t.tid]
+			));
+			await db.sortedSetRemove(cids.map(cid => `cid:${cid}:tag:${tag}:topics`), tids);
 
-	Topics.getTagTids = function (tag, start, stop, callback) {
-		db.getSortedSetRevRange('tag:' + tag + ':topics', start, stop, callback);
-	};
-
-	Topics.getTagTopicCount = function (tag, callback) {
-		db.sortedSetCard('tag:' + tag + ':topics', callback);
-	};
-
-	Topics.deleteTags = function (tags, callback) {
-		if (!Array.isArray(tags) || !tags.length) {
-			return callback();
-		}
-
-		async.series([
-			function (next) {
-				removeTagsFromTopics(tags, next);
-			},
-			function (next) {
-				var keys = tags.map(function (tag) {
-					return 'tag:' + tag + ':topics';
-				});
-				db.deleteAll(keys, next);
-			},
-			function (next) {
-				db.sortedSetRemove('tags:topic:count', tags, next);
-			},
-			function (next) {
-				db.deleteAll(tags.map(function (tag) {
-					return 'tag:' + tag;
-				}), next);
-			},
-		], function (err) {
-			callback(err);
-		});
-	};
-
-	function removeTagsFromTopics(tags, callback) {
-		async.eachLimit(tags, 50, function (tag, next) {
-			db.getSortedSetRange('tag:' + tag + ':topics', 0, -1, function (err, tids) {
-				if (err || !tids.length) {
-					return next(err);
+			// update 'tags' field in topic hash
+			topicData.forEach((topic) => {
+				topic.tags = topic.tags.map(tagItem => tagItem.value);
+				const index = topic.tags.indexOf(tag);
+				if (index !== -1) {
+					topic.tags.splice(index, 1, newTagName);
 				}
-				var keys = tids.map(function (tid) {
-					return 'topic:' + tid + ':tags';
-				});
-
-				db.setsRemove(keys, tag, next);
 			});
-		}, callback);
+			await db.setObjectBulk(
+				topicData.map(t => `topic:${t.tid}`),
+				topicData.map(t => ({ tags: t.tags.join(',') }))
+			);
+		}, {});
+		await Topics.deleteTag(tag);
+		await updateTagCount(newTagName);
+		await Topics.updateCategoryTagsCount(Object.keys(allCids), [newTagName]);
 	}
 
-	Topics.deleteTag = function (tag, callback) {
-		Topics.deleteTags([tag], callback);
-	};
-
-	Topics.getTags = function (start, stop, callback) {
-		async.waterfall([
-			function (next) {
-				db.getSortedSetRevRangeWithScores('tags:topic:count', start, stop, next);
-			},
-			function (tags, next) {
-				Topics.getTagData(tags, next);
-			},
-		], callback);
-	};
-
-	Topics.getTagData = function (tags, callback) {
-		var keys = tags.map(function (tag) {
-			return 'tag:' + tag.value;
-		});
-
-		async.waterfall([
-			function (next) {
-				db.getObjects(keys, next);
-			},
-			function (tagData, next) {
-				tags.forEach(function (tag, index) {
-					tag.valueEscaped = validator.escape(String(tag.value));
-					tag.color = tagData[index] ? tagData[index].color : '';
-					tag.bgColor = tagData[index] ? tagData[index].bgColor : '';
-				});
-				next(null, tags);
-			},
-		], callback);
-	};
-
-	Topics.getTopicTags = function (tid, callback) {
-		db.getSetMembers('topic:' + tid + ':tags', callback);
-	};
-
-	Topics.getTopicsTags = function (tids, callback) {
-		var keys = tids.map(function (tid) {
-			return 'topic:' + tid + ':tags';
-		});
-		db.getSetsMembers(keys, callback);
-	};
-
-	Topics.getTopicTagsObjects = function (tid, callback) {
-		Topics.getTopicsTagsObjects([tid], function (err, data) {
-			callback(err, Array.isArray(data) && data.length ? data[0] : []);
-		});
-	};
-
-	Topics.getTopicsTagsObjects = function (tids, callback) {
-		var sets = tids.map(function (tid) {
-			return 'topic:' + tid + ':tags';
-		});
-		var uniqueTopicTags;
-		var topicTags;
-		async.waterfall([
-			function (next) {
-				db.getSetsMembers(sets, next);
-			},
-			function (_topicTags, next) {
-				topicTags = _topicTags;
-				uniqueTopicTags = _.uniq(_.flatten(topicTags));
-
-				var tags = uniqueTopicTags.map(function (tag) {
-					return { value: tag };
-				});
-
-				async.parallel({
-					tagData: function (next) {
-						Topics.getTagData(tags, next);
-					},
-					counts: function (next) {
-						db.sortedSetScores('tags:topic:count', uniqueTopicTags, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				results.tagData.forEach(function (tag, index) {
-					tag.score = results.counts[index] ? results.counts[index] : 0;
-				});
-
-				var tagData = _.zipObject(uniqueTopicTags, results.tagData);
-
-				topicTags.forEach(function (tags, index) {
-					if (Array.isArray(tags)) {
-						topicTags[index] = tags.map(function (tag) { return tagData[tag]; });
-						topicTags[index].sort(function (tag1, tag2) {
-							return tag2.score - tag1.score;
-						});
-					}
-				});
-
-				next(null, topicTags);
-			},
-		], callback);
-	};
-
-	Topics.updateTopicTags = function (tid, tags, callback) {
-		callback = callback || function () {};
-		async.waterfall([
-			function (next) {
-				Topics.deleteTopicTags(tid, next);
-			},
-			function (next) {
-				Topics.getTopicField(tid, 'timestamp', next);
-			},
-			function (timestamp, next) {
-				Topics.createTags(tags, tid, timestamp, next);
-			},
-		], callback);
-	};
-
-	Topics.deleteTopicTags = function (tid, callback) {
-		async.waterfall([
-			function (next) {
-				Topics.getTopicTags(tid, next);
-			},
-			function (tags, next) {
-				async.series([
-					function (next) {
-						db.delete('topic:' + tid + ':tags', next);
-					},
-					function (next) {
-						var sets = tags.map(function (tag) {
-							return 'tag:' + tag + ':topics';
-						});
-
-						db.sortedSetsRemove(sets, tid, next);
-					},
-					function (next) {
-						async.each(tags, function (tag, next) {
-							updateTagCount(tag, next);
-						}, next);
-					},
-				], next);
-			},
-		], function (err) {
-			callback(err);
-		});
-	};
-
-	Topics.searchTags = function (data, callback) {
-		if (!data || !data.query) {
-			return callback(null, []);
-		}
-
-		async.waterfall([
-			function (next) {
-				if (plugins.hasListeners('filter:topics.searchTags')) {
-					plugins.fireHook('filter:topics.searchTags', { data: data }, next);
-				} else {
-					findMatches(data.query, 0, next);
-				}
-			},
-			function (result, next) {
-				plugins.fireHook('filter:tags.search', { data: data, matches: result.matches }, next);
-			},
-			function (result, next) {
-				next(null, result.matches);
-			},
-		], callback);
-	};
-
-	Topics.autocompleteTags = function (data, callback) {
-		if (!data || !data.query) {
-			return callback(null, []);
-		}
-
-		async.waterfall([
-			function (next) {
-				if (plugins.hasListeners('filter:topics.autocompleteTags')) {
-					plugins.fireHook('filter:topics.autocompleteTags', { data: data }, next);
-				} else {
-					findMatches(data.query, data.cid, next);
-				}
-			},
-			function (result, next) {
-				next(null, result.matches);
-			},
-		], callback);
-	};
-
-	function findMatches(query, cid, callback) {
-		async.waterfall([
-			function (next) {
-				if (parseInt(cid, 10)) {
-					db.getSortedSetRange('cid:' + cid + ':tag:whitelist', 0, -1, next);
-				} else {
-					setImmediate(next, null, []);
-				}
-			},
-			function (tagWhitelist, next) {
-				if (tagWhitelist.length) {
-					setImmediate(next, null, tagWhitelist);
-				} else {
-					db.getSortedSetRevRange('tags:topic:count', 0, -1, next);
-				}
-			},
-			function (tags, next) {
-				query = query.toLowerCase();
-
-				var matches = [];
-				for (var i = 0; i < tags.length; i += 1) {
-					if (tags[i].toLowerCase().startsWith(query)) {
-						matches.push(tags[i]);
-						if (matches.length > 19) {
-							break;
-						}
-					}
-				}
-
-				matches = matches.sort(function (a, b) {
-					return a > b;
-				});
-				next(null, { matches: matches });
-			},
-		], callback);
+	async function updateTagCount(tag) {
+		const count = await Topics.getTagTopicCount(tag);
+		await db.sortedSetAdd('tags:topic:count', count || 0, tag);
+		cache.del('tags:topic:count');
 	}
 
-	Topics.searchAndLoadTags = function (data, callback) {
-		var searchResult = {
+	Topics.getTagTids = async function (tag, start, stop) {
+		const tids = await db.getSortedSetRevRange(`tag:${tag}:topics`, start, stop);
+		const payload = await plugins.hooks.fire('filter:topics.getTagTids', { tag, start, stop, tids });
+		return payload.tids;
+	};
+
+	Topics.getTagTidsByCids = async function (tag, cids, start, stop) {
+		const keys = cids.map(cid => `cid:${cid}:tag:${tag}:topics`);
+		const tids = await db.getSortedSetRevRange(keys, start, stop);
+		const payload = await plugins.hooks.fire('filter:topics.getTagTidsByCids', { tag, cids, start, stop, tids });
+		return payload.tids;
+	};
+
+	Topics.getTagTopicCount = async function (tag, cids = []) {
+		let count = 0;
+		if (cids.length) {
+			count = await db.sortedSetsCardSum(
+				cids.map(cid => `cid:${cid}:tag:${tag}:topics`)
+			);
+		} else {
+			count = await db.sortedSetCard(`tag:${tag}:topics`);
+		}
+
+		const payload = await plugins.hooks.fire('filter:topics.getTagTopicCount', { tag, count, cids });
+		return payload.count;
+	};
+
+	Topics.deleteTags = async function (tags) {
+		if (!Array.isArray(tags) || !tags.length) {
+			return;
+		}
+		await removeTagsFromTopics(tags);
+		const keys = tags.map(tag => `tag:${tag}:topics`);
+		await db.deleteAll(keys);
+		await db.sortedSetRemove('tags:topic:count', tags);
+		cache.del('tags:topic:count');
+		const cids = await categories.getAllCidsFromSet('categories:cid');
+
+		await db.sortedSetRemove(cids.map(cid => `cid:${cid}:tags`), tags);
+
+		const deleteKeys = [];
+		tags.forEach((tag) => {
+			deleteKeys.push(`tag:${tag}`);
+			cids.forEach((cid) => {
+				deleteKeys.push(`cid:${cid}:tag:${tag}:topics`);
+			});
+		});
+		await db.deleteAll(deleteKeys);
+	};
+
+	async function removeTagsFromTopics(tags) {
+		await async.eachLimit(tags, 50, async (tag) => {
+			const tids = await db.getSortedSetRange(`tag:${tag}:topics`, 0, -1);
+			if (!tids.length) {
+				return;
+			}
+
+			await db.deleteObjectFields(
+				tids.map(tid => `topic:${tid}`),
+				['tags'],
+			);
+		});
+	}
+
+	Topics.deleteTag = async function (tag) {
+		await Topics.deleteTags([tag]);
+	};
+
+	Topics.getTags = async function (start, stop) {
+		return await getFromSet('tags:topic:count', start, stop);
+	};
+
+	Topics.getCategoryTags = async function (cids, start, stop) {
+		if (Array.isArray(cids)) {
+			return await db.getSortedSetRevUnion({
+				sets: cids.map(cid => `cid:${cid}:tags`),
+				start,
+				stop,
+			});
+		}
+		return await db.getSortedSetRevRange(`cid:${cids}:tags`, start, stop);
+	};
+
+	Topics.getCategoryTagsData = async function (cids, start, stop) {
+		return await getFromSet(
+			Array.isArray(cids) ? cids.map(cid => `cid:${cid}:tags`) : `cid:${cids}:tags`,
+			start,
+			stop
+		);
+	};
+
+	async function getFromSet(set, start, stop) {
+		let tags;
+		if (Array.isArray(set)) {
+			tags = await db.getSortedSetRevUnion({
+				sets: set,
+				start,
+				stop,
+				withScores: true,
+			});
+		} else {
+			tags = await db.getSortedSetRevRangeWithScores(set, start, stop);
+		}
+
+		const payload = await plugins.hooks.fire('filter:tags.getAll', {
+			tags: tags,
+		});
+		return await Topics.getTagData(payload.tags);
+	}
+
+	Topics.getTagData = async function (tags) {
+		if (!tags.length) {
+			return [];
+		}
+		tags.forEach((tag) => {
+			tag.valueEscaped = validator.escape(String(tag.value));
+		});
+		return tags;
+	};
+
+	Topics.getTopicTags = async function (tid) {
+		const data = await Topics.getTopicsTags([tid]);
+		return data && data[0];
+	};
+
+	Topics.getTopicsTags = async function (tids) {
+		const topicTagData = await Topics.getTopicsFields(tids, ['tags']);
+		return tids.map((tid, i) => topicTagData[i].tags.map(tagData => tagData.value));
+	};
+
+	Topics.getTopicTagsObjects = async function (tid) {
+		const data = await Topics.getTopicsTagsObjects([tid]);
+		return Array.isArray(data) && data.length ? data[0] : [];
+	};
+
+	Topics.getTopicsTagsObjects = async function (tids) {
+		const topicTags = await Topics.getTopicsTags(tids);
+		const uniqueTopicTags = _.uniq(_.flatten(topicTags));
+
+		const tags = uniqueTopicTags.map(tag => ({ value: tag }));
+		const tagData = await Topics.getTagData(tags);
+		const tagDataMap = _.zipObject(uniqueTopicTags, tagData);
+
+		topicTags.forEach((tags, index) => {
+			if (Array.isArray(tags)) {
+				topicTags[index] = tags.map(tag => tagDataMap[tag]);
+			}
+		});
+
+		return topicTags;
+	};
+
+	Topics.addTags = async function (tags, tids) {
+		const topicData = await Topics.getTopicsFields(tids, ['tid', 'cid', 'timestamp', 'tags']);
+		const bulkAdd = [];
+		const bulkSet = [];
+		topicData.forEach((t) => {
+			const topicTags = t.tags.map(tagItem => tagItem.value);
+			tags.forEach((tag) => {
+				bulkAdd.push([`tag:${tag}:topics`, t.timestamp, t.tid]);
+				bulkAdd.push([`cid:${t.cid}:tag:${tag}:topics`, t.timestamp, t.tid]);
+				if (!topicTags.includes(tag)) {
+					topicTags.push(tag);
+				}
+			});
+			bulkSet.push({ tags: topicTags.join(',') });
+		});
+		await Promise.all([
+			db.sortedSetAddBulk(bulkAdd),
+			db.setObjectBulk(
+				topicData.map(t => `topic:${t.tid}`),
+				bulkSet,
+			),
+		]);
+
+		await Promise.all(tags.map(updateTagCount));
+		await Topics.updateCategoryTagsCount(_.uniq(topicData.map(t => t.cid)), tags);
+	};
+
+	Topics.removeTags = async function (tags, tids) {
+		const topicData = await Topics.getTopicsFields(tids, ['tid', 'cid', 'tags']);
+		const bulkRemove = [];
+		const bulkSet = [];
+
+		topicData.forEach((t) => {
+			const topicTags = t.tags.map(tagItem => tagItem.value);
+			tags.forEach((tag) => {
+				bulkRemove.push([`tag:${tag}:topics`, t.tid]);
+				bulkRemove.push([`cid:${t.cid}:tag:${tag}:topics`, t.tid]);
+				if (topicTags.includes(tag)) {
+					topicTags.splice(topicTags.indexOf(tag), 1);
+				}
+			});
+			bulkSet.push({ tags: topicTags.join(',') });
+		});
+		await Promise.all([
+			db.sortedSetRemoveBulk(bulkRemove),
+			db.setObjectBulk(
+				topicData.map(t => `topic:${t.tid}`),
+				bulkSet,
+			),
+		]);
+
+		await Promise.all(tags.map(updateTagCount));
+		await Topics.updateCategoryTagsCount(_.uniq(topicData.map(t => t.cid)), tags);
+	};
+
+	Topics.updateTopicTags = async function (tid, tags) {
+		await Topics.deleteTopicTags(tid);
+		const cid = await Topics.getTopicField(tid, 'cid');
+
+		tags = await Topics.filterTags(tags, cid);
+		await Topics.addTags(tags, [tid]);
+	};
+
+	Topics.deleteTopicTags = async function (tid) {
+		const topicData = await Topics.getTopicFields(tid, ['cid', 'tags']);
+		const { cid } = topicData;
+		const tags = topicData.tags.map(tagItem => tagItem.value);
+		await db.deleteObjectField(`topic:${tid}`, 'tags');
+
+		const sets = tags.map(tag => `tag:${tag}:topics`)
+			.concat(tags.map(tag => `cid:${cid}:tag:${tag}:topics`));
+		await db.sortedSetsRemove(sets, tid);
+
+		await Topics.updateCategoryTagsCount([cid], tags);
+		await Promise.all(tags.map(updateTagCount));
+	};
+
+	Topics.searchTags = async function (data) {
+		if (!data || !data.query) {
+			return [];
+		}
+		let result;
+		if (plugins.hooks.hasListeners('filter:topics.searchTags')) {
+			result = await plugins.hooks.fire('filter:topics.searchTags', { data: data });
+		} else {
+			result = await findMatches(data);
+		}
+		result = await plugins.hooks.fire('filter:tags.search', { data: data, matches: result.matches });
+		return result.matches;
+	};
+
+	Topics.autocompleteTags = async function (data) {
+		if (!data || !data.query) {
+			return [];
+		}
+		let result;
+		if (plugins.hooks.hasListeners('filter:topics.autocompleteTags')) {
+			result = await plugins.hooks.fire('filter:topics.autocompleteTags', { data: data });
+		} else {
+			result = await findMatches(data);
+		}
+		return result.matches;
+	};
+
+	async function getAllTags() {
+		const cached = cache.get('tags:topic:count');
+		if (cached !== undefined) {
+			return cached;
+		}
+		const tags = await db.getSortedSetRevRangeWithScores('tags:topic:count', 0, -1);
+		cache.set('tags:topic:count', tags);
+		return tags;
+	}
+
+	async function findMatches(data) {
+		let { query } = data;
+		let tagWhitelist = [];
+		if (parseInt(data.cid, 10)) {
+			tagWhitelist = await categories.getTagWhitelist([data.cid]);
+		}
+		let tags = [];
+		if (Array.isArray(tagWhitelist[0]) && tagWhitelist[0].length) {
+			const scores = await db.sortedSetScores(`cid:${data.cid}:tags`, tagWhitelist[0]);
+			tags = tagWhitelist[0].map((tag, index) => ({ value: tag, score: scores[index] }));
+		} else if (data.cids) {
+			tags = await db.getSortedSetRevUnion({
+				sets: data.cids.map(cid => `cid:${cid}:tags`),
+				start: 0,
+				stop: -1,
+				withScores: true,
+			});
+		} else {
+			tags = await getAllTags();
+		}
+
+		query = query.toLowerCase();
+
+		const matches = [];
+		for (let i = 0; i < tags.length; i += 1) {
+			if (tags[i].value && tags[i].value.toLowerCase().startsWith(query)) {
+				matches.push(tags[i]);
+				if (matches.length > 39) {
+					break;
+				}
+			}
+		}
+
+		matches.sort((a, b) => {
+			if (a.value < b.value) {
+				return -1;
+			} else if (a.value > b.value) {
+				return 1;
+			}
+			return 0;
+		});
+		return { matches: matches };
+	}
+
+	Topics.searchAndLoadTags = async function (data) {
+		const searchResult = {
 			tags: [],
 			matchCount: 0,
 			pageCount: 1,
 		};
 
 		if (!data || !data.query || !data.query.length) {
-			return callback(null, searchResult);
+			return searchResult;
 		}
-		async.waterfall([
-			function (next) {
-				Topics.searchTags(data, next);
-			},
-			function (tags, next) {
-				async.parallel({
-					counts: function (next) {
-						db.sortedSetScores('tags:topic:count', tags, next);
-					},
-					tagData: function (next) {
-						tags = tags.map(function (tag) {
-							return { value: tag };
-						});
+		const tags = await Topics.searchTags(data);
 
-						Topics.getTagData(tags, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				results.tagData.forEach(function (tag, index) {
-					tag.score = results.counts[index];
-				});
-				results.tagData.sort(function (a, b) {
-					return b.score - a.score;
-				});
-				searchResult.tags = results.tagData;
-				searchResult.matchCount = results.tagData.length;
-				searchResult.pageCount = 1;
-				next(null, searchResult);
-			},
-		], callback);
+		const tagData = await Topics.getTagData(tags.map(tag => ({ value: tag.value })));
+
+		tagData.forEach((tag, index) => {
+			tag.score = tags[index].score;
+		});
+		tagData.sort((a, b) => b.score - a.score);
+		searchResult.tags = tagData;
+		searchResult.matchCount = tagData.length;
+		searchResult.pageCount = 1;
+		return searchResult;
 	};
 
-	Topics.getRelatedTopics = function (topicData, uid, callback) {
-		if (plugins.hasListeners('filter:topic.getRelatedTopics')) {
-			return plugins.fireHook('filter:topic.getRelatedTopics', { topic: topicData, uid: uid }, callback);
+	Topics.getRelatedTopics = async function (topicData, uid) {
+		if (plugins.hooks.hasListeners('filter:topic.getRelatedTopics')) {
+			const result = await plugins.hooks.fire('filter:topic.getRelatedTopics', { topic: topicData, uid: uid, topics: [] });
+			return result.topics;
 		}
 
-		var maximumTopics = parseInt(meta.config.maximumRelatedTopics, 10) || 0;
+		let maximumTopics = meta.config.maximumRelatedTopics;
 		if (maximumTopics === 0 || !topicData.tags || !topicData.tags.length) {
-			return callback(null, []);
+			return [];
 		}
 
 		maximumTopics = maximumTopics || 5;
-
-		async.waterfall([
-			function (next) {
-				async.map(topicData.tags, function (tag, next) {
-					Topics.getTagTids(tag.value, 0, 5, next);
-				}, next);
-			},
-			function (tids, next) {
-				tids = _.shuffle(_.uniq(_.flatten(tids))).slice(0, maximumTopics);
-				Topics.getTopics(tids, uid, next);
-			},
-			function (topics, next) {
-				topics = topics.filter(function (topic) {
-					return topic && !topic.deleted && parseInt(topic.uid, 10) !== parseInt(uid, 10);
-				});
-				next(null, topics);
-			},
-		], callback);
+		let tids = await Promise.all(topicData.tags.map(tag => Topics.getTagTids(tag.value, 0, 5)));
+		tids = _.shuffle(_.uniq(_.flatten(tids))).slice(0, maximumTopics);
+		const topics = await Topics.getTopics(tids, uid);
+		return topics.filter(t => t && !t.deleted && parseInt(t.uid, 10) !== parseInt(uid, 10));
 	};
 };

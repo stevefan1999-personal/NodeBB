@@ -1,96 +1,111 @@
 'use strict';
 
-module.exports = function (redisClient, module) {
-	module.flushdb = function (callback) {
-		redisClient.send_command('flushdb', [], function (err) {
-			if (typeof callback === 'function') {
-				callback(err);
-			}
-		});
+module.exports = function (module) {
+	const helpers = require('./helpers');
+
+	module.flushdb = async function () {
+		await module.client.async.send_command('flushdb', []);
 	};
 
-	module.emptydb = function (callback) {
-		module.flushdb(callback);
+	module.emptydb = async function () {
+		await module.flushdb();
+		module.objectCache.reset();
 	};
 
-	module.exists = function (key, callback) {
-		redisClient.exists(key, function (err, exists) {
-			callback(err, exists === 1);
-		});
-	};
-
-	module.delete = function (key, callback) {
-		callback = callback || function () {};
-		redisClient.del(key, function (err) {
-			callback(err);
-		});
-	};
-
-	module.deleteAll = function (keys, callback) {
-		callback = callback || function () {};
-		var multi = redisClient.multi();
-		for (var i = 0; i < keys.length; i += 1) {
-			multi.del(keys[i]);
+	module.exists = async function (key) {
+		if (Array.isArray(key)) {
+			const batch = module.client.batch();
+			key.forEach(key => batch.exists(key));
+			const data = await helpers.execBatch(batch);
+			return data.map(exists => exists === 1);
 		}
-		multi.exec(function (err) {
-			callback(err);
-		});
+		const exists = await module.client.async.exists(key);
+		return exists === 1;
 	};
 
-	module.get = function (key, callback) {
-		redisClient.get(key, callback);
+	module.scan = async function (params) {
+		let cursor = '0';
+		let returnData = [];
+		const seen = {};
+		do {
+			/* eslint-disable no-await-in-loop */
+			const res = await module.client.async.scan(cursor, 'MATCH', params.match, 'COUNT', 10000);
+			cursor = res[0];
+			const values = res[1].filter((value) => {
+				const isSeen = !!seen[value];
+				if (!isSeen) {
+					seen[value] = 1;
+				}
+				return !isSeen;
+			});
+			returnData = returnData.concat(values);
+		} while (cursor !== '0');
+		return returnData;
 	};
 
-	module.set = function (key, value, callback) {
-		callback = callback || function () {};
-		redisClient.set(key, value, function (err) {
-			callback(err);
-		});
+	module.delete = async function (key) {
+		await module.client.async.del(key);
+		module.objectCache.del(key);
 	};
 
-	module.increment = function (key, callback) {
-		callback = callback || function () {};
-		redisClient.incr(key, callback);
+	module.deleteAll = async function (keys) {
+		if (!Array.isArray(keys) || !keys.length) {
+			return;
+		}
+		await module.client.async.del(keys);
+		module.objectCache.del(keys);
 	};
 
-	module.rename = function (oldKey, newKey, callback) {
-		callback = callback || function () {};
-		redisClient.rename(oldKey, newKey, function (err) {
-			callback(err && err.message !== 'ERR no such key' ? err : null);
-		});
+	module.get = async function (key) {
+		return await module.client.async.get(key);
 	};
 
-	module.type = function (key, callback) {
-		redisClient.type(key, function (err, type) {
-			callback(err, type !== 'none' ? type : null);
-		});
+	module.set = async function (key, value) {
+		await module.client.async.set(key, value);
 	};
 
-	module.expire = function (key, seconds, callback) {
-		callback = callback || function () {};
-		redisClient.expire(key, seconds, function (err) {
-			callback(err);
-		});
+	module.increment = async function (key) {
+		return await module.client.async.incr(key);
 	};
 
-	module.expireAt = function (key, timestamp, callback) {
-		callback = callback || function () {};
-		redisClient.expireat(key, timestamp, function (err) {
-			callback(err);
-		});
+	module.rename = async function (oldKey, newKey) {
+		try {
+			await module.client.async.rename(oldKey, newKey);
+		} catch (err) {
+			if (err && err.message !== 'ERR no such key') {
+				throw err;
+			}
+		}
+
+		module.objectCache.del([oldKey, newKey]);
 	};
 
-	module.pexpire = function (key, ms, callback) {
-		callback = callback || function () {};
-		redisClient.pexpire(key, ms, function (err) {
-			callback(err);
-		});
+	module.type = async function (key) {
+		const type = await module.client.async.type(key);
+		return type !== 'none' ? type : null;
 	};
 
-	module.pexpireAt = function (key, timestamp, callback) {
-		callback = callback || function () {};
-		redisClient.pexpireat(key, timestamp, function (err) {
-			callback(err);
-		});
+	module.expire = async function (key, seconds) {
+		await module.client.async.expire(key, seconds);
+	};
+
+	module.expireAt = async function (key, timestamp) {
+		await module.client.async.expireat(key, timestamp);
+	};
+
+	module.pexpire = async function (key, ms) {
+		await module.client.async.pexpire(key, ms);
+	};
+
+	module.pexpireAt = async function (key, timestamp) {
+		await module.client.async.pexpireat(key, timestamp);
+	};
+
+	module.ttl = async function (key) {
+		return await module.client.async.ttl(key);
+	};
+
+	module.pttl = async function (key) {
+		return await module.client.async.pttl(key);
 	};
 };

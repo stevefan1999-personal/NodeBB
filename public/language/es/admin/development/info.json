@@ -1,13 +1,16 @@
 {
-	"you-are-on": "Info - Tú estás en <strong>%1:%2</strong>",
+	"you-are-on": "Tú estas en <strong>%1:%2</strong>",
+	"ip": "IP <strong>%1</strong>",
 	"nodes-responded": "¡%1 nodos respondieron en %2ms!",
 	"host": "host",
+	"primary": "primary / run jobs",
 	"pid": "pid",
 	"nodejs": "nodejs",
 	"online": "en-linea",
 	"git": "git",
 	"memory": "memoria",
-	"load": "cargar",
+	"load": "carga del sistema",
+	"cpu-usage": "uso del cpu",
 	"uptime": "tiempo de actividad",
 
 	"registered": "Registrado",

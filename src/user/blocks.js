@@ -1,147 +1,116 @@
 'use strict';
 
-var async = require('async');
-var LRU = require('lru-cache');
+const async = require('async');
+const LRU = require('lru-cache');
 
-
-var db = require('../database');
-var pubsub = require('../pubsub');
+const db = require('../database');
+const pubsub = require('../pubsub');
+const plugins = require('../plugins');
 
 module.exports = function (User) {
 	User.blocks = {
-		_cache: LRU({
+		_cache: new LRU({
 			max: 100,
 			length: function () { return 1; },
 			maxAge: 0,
 		}),
 	};
 
-	User.blocks.is = function (targetUid, uid, callback) {
-		User.blocks.list(uid, function (err, blocks) {
-			callback(err, blocks.includes(parseInt(targetUid, 10)));
-		});
+	User.blocks.is = async function (targetUid, uid) {
+		const blocks = await User.blocks.list(uid);
+		return blocks.includes(parseInt(targetUid, 10));
 	};
 
-	User.blocks.can = function (callerUid, blockerUid, blockeeUid, callback) {
-		// Administrators and global moderators cannot be blocked
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					isCallerAdminOrMod: function (next) {
-						User.isAdminOrGlobalMod(callerUid, next);
-					},
-					isBlockeeAdminOrMod: function (next) {
-						User.isAdminOrGlobalMod(blockeeUid, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				if (results.isBlockeeAdminOrMod) {
-					return callback(null, false);
-				}
-				if (parseInt(callerUid, 10) !== parseInt(blockerUid, 10) && !results.isCallerAdminOrMod) {
-					return callback(null, false);
-				}
-				next(null, true);
-			},
-		], callback);
-	};
-
-	User.blocks.list = function (uid, callback) {
-		if (User.blocks._cache.has(parseInt(uid, 10))) {
-			return setImmediate(callback, null, User.blocks._cache.get(parseInt(uid, 10)));
+	User.blocks.can = async function (callerUid, blockerUid, blockeeUid) {
+		// Guests can't block
+		if (blockerUid === 0 || blockeeUid === 0) {
+			throw new Error('[[error:cannot-block-guest]]');
+		} else if (blockerUid === blockeeUid) {
+			throw new Error('[[error:cannot-block-self]]');
 		}
 
-		db.getSortedSetRange('uid:' + uid + ':blocked_uids', 0, -1, function (err, blocked) {
-			if (err) {
-				return callback(err);
-			}
-
-			blocked = blocked.map(uid => parseInt(uid, 10)).filter(Boolean);
-			User.blocks._cache.set(parseInt(uid, 10), blocked);
-			callback(null, blocked);
-		});
+		// Administrators and global moderators cannot be blocked
+		// Only admins/mods can block users as another user
+		const [isCallerAdminOrMod, isBlockeeAdminOrMod] = await Promise.all([
+			User.isAdminOrGlobalMod(callerUid),
+			User.isAdminOrGlobalMod(blockeeUid),
+		]);
+		if (isBlockeeAdminOrMod) {
+			throw new Error('[[error:cannot-block-privileged]]');
+		}
+		if (parseInt(callerUid, 10) !== parseInt(blockerUid, 10) && !isCallerAdminOrMod) {
+			throw new Error('[[error:no-privileges]]');
+		}
 	};
 
-	pubsub.on('user:blocks:cache:del', function (uid) {
+	User.blocks.list = async function (uid) {
+		if (User.blocks._cache.has(parseInt(uid, 10))) {
+			return User.blocks._cache.get(parseInt(uid, 10));
+		}
+
+		let blocked = await db.getSortedSetRange(`uid:${uid}:blocked_uids`, 0, -1);
+		blocked = blocked.map(uid => parseInt(uid, 10)).filter(Boolean);
+		User.blocks._cache.set(parseInt(uid, 10), blocked);
+		return blocked;
+	};
+
+	pubsub.on('user:blocks:cache:del', (uid) => {
 		User.blocks._cache.del(uid);
 	});
 
-	User.blocks.add = function (targetUid, uid, callback) {
-		async.waterfall([
-			async.apply(this.applyChecks, true, targetUid, uid),
-			async.apply(db.sortedSetAdd.bind(db), 'uid:' + uid + ':blocked_uids', Date.now(), targetUid),
-			async.apply(User.incrementUserFieldBy, uid, 'blocksCount', 1),
-			function (_blank, next) {
-				User.blocks._cache.del(parseInt(uid, 10));
-				pubsub.publish('user:blocks:cache:del', parseInt(uid, 10));
-				setImmediate(next);
-			},
-		], callback);
+	User.blocks.add = async function (targetUid, uid) {
+		await User.blocks.applyChecks('block', targetUid, uid);
+		await db.sortedSetAdd(`uid:${uid}:blocked_uids`, Date.now(), targetUid);
+		await User.incrementUserFieldBy(uid, 'blocksCount', 1);
+		User.blocks._cache.del(parseInt(uid, 10));
+		pubsub.publish('user:blocks:cache:del', parseInt(uid, 10));
+		plugins.hooks.fire('action:user.blocks.add', { uid: uid, targetUid: targetUid });
 	};
 
-	User.blocks.remove = function (targetUid, uid, callback) {
-		async.waterfall([
-			async.apply(this.applyChecks, false, targetUid, uid),
-			async.apply(db.sortedSetRemove.bind(db), 'uid:' + uid + ':blocked_uids', targetUid),
-			async.apply(User.decrementUserFieldBy, uid, 'blocksCount', 1),
-			function (_blank, next) {
-				User.blocks._cache.del(parseInt(uid, 10));
-				pubsub.publish('user:blocks:cache:del', parseInt(uid, 10));
-				setImmediate(next);
-			},
-		], callback);
+	User.blocks.remove = async function (targetUid, uid) {
+		await User.blocks.applyChecks('unblock', targetUid, uid);
+		await db.sortedSetRemove(`uid:${uid}:blocked_uids`, targetUid);
+		await User.decrementUserFieldBy(uid, 'blocksCount', 1);
+		User.blocks._cache.del(parseInt(uid, 10));
+		pubsub.publish('user:blocks:cache:del', parseInt(uid, 10));
+		plugins.hooks.fire('action:user.blocks.remove', { uid: uid, targetUid: targetUid });
 	};
 
-	User.blocks.applyChecks = function (block, targetUid, uid, callback) {
-		if (parseInt(targetUid, 10) === parseInt(uid, 10)) {
-			return setImmediate(callback, new Error('[[error:cannot-block-self]]'));
+	User.blocks.applyChecks = async function (type, targetUid, uid) {
+		await User.blocks.can(uid, uid, targetUid);
+		const isBlock = type === 'block';
+		const is = await User.blocks.is(targetUid, uid);
+		if (is === isBlock) {
+			throw new Error(`[[error:already-${isBlock ? 'blocked' : 'unblocked'}]]`);
 		}
+	};
 
-		User.blocks.is(targetUid, uid, function (err, is) {
-			callback(err || (is === block ? new Error('[[error:already-' + (block ? 'blocked' : 'unblocked') + ']]') : null));
+	User.blocks.filterUids = async function (targetUid, uids) {
+		return await async.filter(uids, async (uid) => {
+			const isBlocked = await User.blocks.is(targetUid, uid);
+			return !isBlocked;
 		});
 	};
 
-	User.blocks.filterUids = function (targetUid, uids, callback) {
-		async.filter(uids, function (uid, next) {
-			User.blocks.is(targetUid, uid, function (err, blocked) {
-				next(err, !blocked);
-			});
-		}, callback);
-	};
-
-	User.blocks.filter = function (uid, property, set, callback) {
+	User.blocks.filter = async function (uid, property, set) {
 		// Given whatever is passed in, iterates through it, and removes entries made by blocked uids
 		// property is optional
-		if (Array.isArray(property) && typeof set === 'function' && !callback) {
-			callback = set;
+		if (Array.isArray(property) && typeof set === 'undefined') {
 			set = property;
 			property = 'uid';
 		}
 
-		if (!Array.isArray(set) || !set.length || !set.every((item) => {
-			if (!item) {
-				return false;
-			}
-
-			const check = item.hasOwnProperty(property) ? item[property] : item;
-			return ['number', 'string'].includes(typeof check);
-		})) {
-			return callback(null, set);
+		if (!Array.isArray(set) || !set.length) {
+			return set;
 		}
 
 		const isPlain = typeof set[0] !== 'object';
-		User.blocks.list(uid, function (err, blocked_uids) {
-			if (err) {
-				return callback(err);
-			}
+		const blocked_uids = await User.blocks.list(uid);
+		const blockedSet = new Set(blocked_uids);
 
-			set = set.filter(function (item) {
-				return !blocked_uids.includes(parseInt(isPlain ? item : item[property], 10));
-			});
+		set = set.filter(item => !blockedSet.has(parseInt(isPlain ? item : (item && item[property]), 10)));
+		const data = await plugins.hooks.fire('filter:user.blocks.filter', { set: set, property: property, uid: uid, blockedSet: blockedSet });
 
-			callback(null, set);
-		});
+		return data.set;
 	};
 };

@@ -1,207 +1,280 @@
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
-var nconf = require('nconf');
+const validator = require('validator');
 
-var user = require('../../user');
-var meta = require('../../meta');
-var db = require('../../database');
-var pagination = require('../../pagination');
-var events = require('../../events');
-var plugins = require('../../plugins');
+const user = require('../../user');
+const meta = require('../../meta');
+const db = require('../../database');
+const pagination = require('../../pagination');
+const events = require('../../events');
+const plugins = require('../../plugins');
+const privileges = require('../../privileges');
+const utils = require('../../utils');
 
-var usersController = module.exports;
+const usersController = module.exports;
 
-var userFields = ['uid', 'username', 'userslug', 'email', 'postcount', 'joindate', 'banned',
-	'reputation', 'picture', 'flags', 'lastonline', 'email:confirmed'];
+const userFields = [
+	'uid', 'username', 'userslug', 'email', 'postcount', 'joindate', 'banned',
+	'reputation', 'picture', 'flags', 'lastonline', 'email:confirmed',
+];
 
-usersController.search = function (req, res) {
-	res.render('admin/manage/users', {
-		search_display: '',
-		users: [],
-	});
+usersController.index = async function (req, res) {
+	if (req.query.query) {
+		await usersController.search(req, res);
+	} else {
+		await getUsers(req, res);
+	}
 };
 
-usersController.sortByJoinDate = function (req, res, next) {
-	getUsers('users:joindate', 'latest', undefined, undefined, req, res, next);
-};
+async function getUsers(req, res) {
+	const sortDirection = req.query.sortDirection || 'desc';
+	const reverse = sortDirection === 'desc';
 
-usersController.notValidated = function (req, res, next) {
-	getUsers('users:notvalidated', 'notvalidated', undefined, undefined, req, res, next);
-};
+	const page = parseInt(req.query.page, 10) || 1;
+	let resultsPerPage = parseInt(req.query.resultsPerPage, 10) || 50;
+	if (![50, 100, 250, 500].includes(resultsPerPage)) {
+		resultsPerPage = 50;
+	}
+	let sortBy = validator.escape(req.query.sortBy || '');
+	const filterBy = Array.isArray(req.query.filters || []) ? (req.query.filters || []) : [req.query.filters];
+	const start = Math.max(0, page - 1) * resultsPerPage;
+	const stop = start + resultsPerPage - 1;
 
-usersController.noPosts = function (req, res, next) {
-	getUsers('users:postcount', 'noposts', '-inf', 0, req, res, next);
-};
+	function buildSet() {
+		const sortToSet = {
+			postcount: 'users:postcount',
+			reputation: 'users:reputation',
+			joindate: 'users:joindate',
+			lastonline: 'users:online',
+			flags: 'users:flags',
+		};
 
-usersController.topPosters = function (req, res, next) {
-	getUsers('users:postcount', 'topposts', 0, '+inf', req, res, next);
-};
+		const set = [];
+		if (sortBy) {
+			set.push(sortToSet[sortBy]);
+		}
+		if (filterBy.includes('unverified')) {
+			set.push('group:unverified-users:members');
+		}
+		if (filterBy.includes('verified')) {
+			set.push('group:verified-users:members');
+		}
+		if (filterBy.includes('banned')) {
+			set.push('users:banned');
+		}
+		if (!set.length) {
+			set.push('users:online');
+			sortBy = 'lastonline';
+		}
+		return set.length > 1 ? set : set[0];
+	}
 
-usersController.mostReputaion = function (req, res, next) {
-	getUsers('users:reputation', 'mostreputation', 0, '+inf', req, res, next);
-};
+	async function getCount(set) {
+		if (Array.isArray(set)) {
+			return await db.sortedSetIntersectCard(set);
+		}
+		return await db.sortedSetCard(set);
+	}
 
-usersController.flagged = function (req, res, next) {
-	getUsers('users:flags', 'mostflags', 1, '+inf', req, res, next);
-};
-
-usersController.inactive = function (req, res, next) {
-	var timeRange = 1000 * 60 * 60 * 24 * 30 * (parseInt(req.query.months, 10) || 3);
-	var cutoff = Date.now() - timeRange;
-	getUsers('users:online', 'inactive', '-inf', cutoff, req, res, next);
-};
-
-usersController.banned = function (req, res, next) {
-	getUsers('users:banned', 'banned', undefined, undefined, req, res, next);
-};
-
-usersController.registrationQueue = function (req, res, next) {
-	var page = parseInt(req.query.page, 10) || 1;
-	var itemsPerPage = 20;
-	var start = (page - 1) * 20;
-	var stop = start + itemsPerPage - 1;
-	var invitations;
-
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				registrationQueueCount: function (next) {
-					db.sortedSetCard('registration:queue', next);
-				},
-				users: function (next) {
-					user.getRegistrationQueue(start, stop, next);
-				},
-				customHeaders: function (next) {
-					plugins.fireHook('filter:admin.registrationQueue.customHeaders', { headers: [] }, next);
-				},
-				invites: function (next) {
-					async.waterfall([
-						function (next) {
-							user.getAllInvites(next);
-						},
-						function (_invitations, next) {
-							invitations = _invitations;
-							async.map(invitations, function (invites, next) {
-								user.getUserField(invites.uid, 'username', next);
-							}, next);
-						},
-						function (usernames, next) {
-							invitations.forEach(function (invites, index) {
-								invites.username = usernames[index];
-							});
-							async.map(invitations, function (invites, next) {
-								async.map(invites.invitations, user.getUsernameByEmail, next);
-							}, next);
-						},
-						function (usernames, next) {
-							invitations.forEach(function (invites, index) {
-								invites.invitations = invites.invitations.map(function (email, i) {
-									return {
-										email: email,
-										username: usernames[index][i] === '[[global:guest]]' ? '' : usernames[index][i],
-									};
-								});
-							});
-							next(null, invitations);
-						},
-					], next);
-				},
-			}, next);
-		},
-		function (data) {
-			var pageCount = Math.max(1, Math.ceil(data.registrationQueueCount / itemsPerPage));
-			data.pagination = pagination.create(page, pageCount);
-			data.customHeaders = data.customHeaders.headers;
-			res.render('admin/manage/registration', data);
-		},
-	], next);
-};
-
-function getUsers(set, section, min, max, req, res, next) {
-	var page = parseInt(req.query.page, 10) || 1;
-	var resultsPerPage = 50;
-	var start = Math.max(0, page - 1) * resultsPerPage;
-	var stop = start + resultsPerPage - 1;
-	var byScore = min !== undefined && max !== undefined;
-
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				count: function (next) {
-					if (byScore) {
-						db.sortedSetCount(set, min, max, next);
-					} else if (set === 'users:banned' || set === 'users:notvalidated') {
-						db.sortedSetCard(set, next);
-					} else {
-						db.getObjectField('global', 'userCount', next);
-					}
-				},
-				users: function (next) {
-					async.waterfall([
-						function (next) {
-							if (byScore) {
-								db.getSortedSetRevRangeByScore(set, start, resultsPerPage, max, min, next);
-							} else {
-								user.getUidsFromSet(set, start, stop, next);
-							}
-						},
-						function (uids, next) {
-							user.getUsersWithFields(uids, userFields, req.uid, next);
-						},
-					], next);
-				},
-			}, next);
-		},
-		function (results) {
-			results.users = results.users.filter(function (user) {
-				user.email = validator.escape(String(user.email || ''));
-				return user && parseInt(user.uid, 10);
+	async function getUids(set) {
+		let uids = [];
+		if (Array.isArray(set)) {
+			const weights = set.map((s, index) => (index ? 0 : 1));
+			uids = await db[reverse ? 'getSortedSetRevIntersect' : 'getSortedSetIntersect']({
+				sets: set,
+				start: start,
+				stop: stop,
+				weights: weights,
 			});
-			var data = {
-				users: results.users,
-				page: page,
-				pageCount: Math.max(1, Math.ceil(results.count / resultsPerPage)),
-			};
-			data[section] = true;
-			render(req, res, data);
-		},
-	], next);
+		} else {
+			uids = await db[reverse ? 'getSortedSetRevRange' : 'getSortedSetRange'](set, start, stop);
+		}
+		return uids;
+	}
+
+	const set = buildSet();
+	const uids = await getUids(set);
+	const [count, users] = await Promise.all([
+		getCount(set),
+		loadUserInfo(req.uid, uids),
+	]);
+
+	await render(req, res, {
+		users: users.filter(user => user && parseInt(user.uid, 10)),
+		page: page,
+		pageCount: Math.max(1, Math.ceil(count / resultsPerPage)),
+		resultsPerPage: resultsPerPage,
+		reverse: reverse,
+		sortBy: sortBy,
+	});
 }
 
-function render(req, res, data) {
-	data.search_display = 'hidden';
-	data.pagination = pagination.create(data.page, data.pageCount, req.query);
-	data.requireEmailConfirmation = parseInt(meta.config.requireEmailConfirmation, 10) === 1;
+usersController.search = async function (req, res) {
+	const sortDirection = req.query.sortDirection || 'desc';
+	const reverse = sortDirection === 'desc';
+	const page = parseInt(req.query.page, 10) || 1;
+	let resultsPerPage = parseInt(req.query.resultsPerPage, 10) || 50;
+	if (![50, 100, 250, 500].includes(resultsPerPage)) {
+		resultsPerPage = 50;
+	}
 
-	var registrationType = meta.config.registrationType;
+	const searchData = await user.search({
+		uid: req.uid,
+		query: req.query.query,
+		searchBy: req.query.searchBy,
+		sortBy: req.query.sortBy,
+		sortDirection: sortDirection,
+		filters: req.query.filters,
+		page: page,
+		resultsPerPage: resultsPerPage,
+		findUids: async function (query, searchBy, hardCap) {
+			if (!query || query.length < 2) {
+				return [];
+			}
+			query = String(query).toLowerCase();
+			if (!query.endsWith('*')) {
+				query += '*';
+			}
+
+			const data = await db.getSortedSetScan({
+				key: `${searchBy}:sorted`,
+				match: query,
+				limit: hardCap || (resultsPerPage * 10),
+			});
+			return data.map(data => data.split(':').pop());
+		},
+	});
+
+	const uids = searchData.users.map(user => user && user.uid);
+	searchData.users = await loadUserInfo(req.uid, uids);
+	if (req.query.searchBy === 'ip') {
+		searchData.users.forEach((user) => {
+			user.ip = user.ips.find(ip => ip.includes(String(req.query.query)));
+		});
+	}
+	searchData.query = validator.escape(String(req.query.query || ''));
+	searchData.page = page;
+	searchData.resultsPerPage = resultsPerPage;
+	searchData.sortBy = req.query.sortBy;
+	searchData.reverse = reverse;
+	await render(req, res, searchData);
+};
+
+async function loadUserInfo(callerUid, uids) {
+	async function getIPs() {
+		return await Promise.all(uids.map(uid => db.getSortedSetRevRange(`uid:${uid}:ip`, 0, -1)));
+	}
+	const [isAdmin, userData, lastonline, ips] = await Promise.all([
+		user.isAdministrator(uids),
+		user.getUsersWithFields(uids, userFields, callerUid),
+		db.sortedSetScores('users:online', uids),
+		getIPs(),
+	]);
+	userData.forEach((user, index) => {
+		if (user) {
+			user.administrator = isAdmin[index];
+			user.flags = userData[index].flags || 0;
+			const timestamp = lastonline[index] || user.joindate;
+			user.lastonline = timestamp;
+			user.lastonlineISO = utils.toISOString(timestamp);
+			user.ips = ips[index];
+			user.ip = ips[index] && ips[index][0] ? ips[index][0] : null;
+		}
+	});
+	return userData;
+}
+
+usersController.registrationQueue = async function (req, res) {
+	const page = parseInt(req.query.page, 10) || 1;
+	const itemsPerPage = 20;
+	const start = (page - 1) * 20;
+	const stop = start + itemsPerPage - 1;
+
+	const data = await utils.promiseParallel({
+		registrationQueueCount: db.sortedSetCard('registration:queue'),
+		users: user.getRegistrationQueue(start, stop),
+		customHeaders: plugins.hooks.fire('filter:admin.registrationQueue.customHeaders', { headers: [] }),
+		invites: getInvites(),
+	});
+	const pageCount = Math.max(1, Math.ceil(data.registrationQueueCount / itemsPerPage));
+	data.pagination = pagination.create(page, pageCount);
+	data.customHeaders = data.customHeaders.headers;
+	res.render('admin/manage/registration', data);
+};
+
+async function getInvites() {
+	const invitations = await user.getAllInvites();
+	const uids = invitations.map(invite => invite.uid);
+	let usernames = await user.getUsersFields(uids, ['username']);
+	usernames = usernames.map(user => user.username);
+
+	invitations.forEach((invites, index) => {
+		invites.username = usernames[index];
+	});
+
+	async function getUsernamesByEmails(emails) {
+		const uids = await db.sortedSetScores('email:uid', emails.map(email => String(email).toLowerCase()));
+		const usernames = await user.getUsersFields(uids, ['username']);
+		return usernames.map(user => user.username);
+	}
+
+	usernames = await Promise.all(invitations.map(invites => getUsernamesByEmails(invites.invitations)));
+
+	invitations.forEach((invites, index) => {
+		invites.invitations = invites.invitations.map((email, i) => ({
+			email: email,
+			username: usernames[index][i] === '[[global:guest]]' ? '' : usernames[index][i],
+		}));
+	});
+	return invitations;
+}
+
+async function render(req, res, data) {
+	data.pagination = pagination.create(data.page, data.pageCount, req.query);
+
+	const { registrationType } = meta.config;
 
 	data.inviteOnly = registrationType === 'invite-only' || registrationType === 'admin-invite-only';
 	data.adminInviteOnly = registrationType === 'admin-invite-only';
+	data[`sort_${data.sortBy}`] = true;
+	if (req.query.searchBy) {
+		data[`searchBy_${validator.escape(String(req.query.searchBy))}`] = true;
+	}
+	const filterBy = Array.isArray(req.query.filters || []) ? (req.query.filters || []) : [req.query.filters];
+	filterBy.forEach((filter) => {
+		data[`filterBy_${validator.escape(String(filter))}`] = true;
+	});
+	data.userCount = parseInt(await db.getObjectField('global', 'userCount'), 10);
+	if (data.adminInviteOnly) {
+		data.showInviteButton = await privileges.users.isAdministrator(req.uid);
+	} else {
+		data.showInviteButton = await privileges.users.hasInvitePrivilege(req.uid);
+	}
 
 	res.render('admin/manage/users', data);
 }
 
-usersController.getCSV = function (req, res, next) {
-	var referer = req.headers.referer;
-
-	if (!referer || !referer.replace(nconf.get('url'), '').startsWith('/admin/manage/users')) {
-		return res.status(403).send('[[error:invalid-origin]]');
-	}
-	events.log({
+usersController.getCSV = async function (req, res, next) {
+	await events.log({
 		type: 'getUsersCSV',
 		uid: req.uid,
 		ip: req.ip,
 	});
-	async.waterfall([
-		function (next) {
-			user.getUsersCSV(next);
+	const path = require('path');
+	const { baseDir } = require('../../constants').paths;
+	res.sendFile('users.csv', {
+		root: path.join(baseDir, 'build/export'),
+		headers: {
+			'Content-Type': 'text/csv',
+			'Content-Disposition': 'attachment; filename=users.csv',
 		},
-		function (data) {
-			res.attachment('users.csv');
-			res.setHeader('Content-Type', 'text/csv');
-			res.end(data);
-		},
-	], next);
+	}, (err) => {
+		if (err) {
+			if (err.code === 'ENOENT') {
+				res.locals.isAPI = false;
+				return next();
+			}
+			return next(err);
+		}
+	});
 };

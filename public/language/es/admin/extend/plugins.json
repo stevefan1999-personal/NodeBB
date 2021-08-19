@@ -1,4 +1,5 @@
 {
+	"trending": "Trending",
 	"installed": "Instalado",
 	"active": "Activo",
 	"inactive": "Inactivo ",
@@ -9,6 +10,7 @@
 
 	"plugin-search": "Buscar",
 	"plugin-search-placeholder": "Búscando Plug-in",
+	"submit-anonymous-usage": "Enviar datos anónimos de uso de complementos.",
 	"reorder-plugins": "Re-ordenar Plug-ins",
 	"order-active": "Ordenar Plug-ins Activos",
 	"dev-interested": "¿Estas interesado en escribir plug-ins para NodeBB?",
@@ -29,13 +31,15 @@
 	"plugin-item.more-info": "Para mas información:",
 	"plugin-item.unknown": "Desconocido",
 	"plugin-item.unknown-explanation": "El estado de este plug-in no puede determinsarse, posiblemente es debido a un error de configuración.",
+	"plugin-item.compatible": "Este complemento funciona en NodeBB %1",
+	"plugin-item.not-compatible": "Este complemento no tiene datos de compatibilidad, asegúrese de que funcione antes de instalarlo en su entorno de producción.",
 
 	"alert.enabled": "El plug-in esta Activo",
 	"alert.disabled": "Plug-in Des-habilitado",
 	"alert.upgraded": "Plug-in Actualizado",
 	"alert.installed": "Plug-in Instalado",
 	"alert.uninstalled": "Plug-in Desinstalado",
-	"alert.activate-success": "Por favor reiniciá NodeBB para activar el plug-in por completo",
+	"alert.activate-success": "Please rebuild and restart your NodeBB to fully activate this plugin",
 	"alert.deactivate-success": "Plugin desactivado con éxito",
 	"alert.upgrade-success": "Por favor reconstruye y reinicia NodeBB para actualizar del todo este plugin.",
 	"alert.install-success": "Plugin instalado con éxito, por favor activa el plugin.",

@@ -1,30 +1,20 @@
 'use strict';
 
 
-define('search', ['navigator', 'translator', 'storage'], function (nav, translator, storage) {
+define('search', ['navigator', 'translator', 'storage', 'hooks'], function (nav, translator, storage, hooks) {
 	var Search = {
 		current: {},
 	};
 
 	Search.query = function (data, callback) {
-		var term = data.term;
-
 		// Detect if a tid was specified
-		var topicSearch = term.match(/^in:topic-([\d]+) /);
-
+		var topicSearch = data.term.match(/^in:topic-([\d]+) /);
+		callback = callback || function () {};
 		if (!topicSearch) {
-			term = term.replace(/^[ ?#]*/, '');
-
-			try {
-				term = encodeURIComponent(term);
-			} catch (e) {
-				return app.alertError('[[error:invalid-search-term]]');
-			}
-
 			ajaxify.go('search?' + createQueryString(data));
 			callback();
 		} else {
-			var cleanedTerm = term.replace(topicSearch[0], '');
+			var cleanedTerm = data.term.replace(topicSearch[0], '');
 			var tid = topicSearch[1];
 
 			if (cleanedTerm.length > 0) {
@@ -33,11 +23,28 @@ define('search', ['navigator', 'translator', 'storage'], function (nav, translat
 		}
 	};
 
+	Search.api = function (data, callback) {
+		var apiURL = config.relative_path + '/api/search?' + createQueryString(data);
+		data.searchOnly = undefined;
+		var searchURL = config.relative_path + '/search?' + createQueryString(data);
+		$.get(apiURL, function (result) {
+			result.url = searchURL;
+			callback(result);
+		});
+	};
+
 	function createQueryString(data) {
-		var searchIn = data.in || 'titlesposts';
+		var searchIn = data.in || 'titles';
 		var postedBy = data.by || '';
+		var term = data.term.replace(/^[ ?#]*/, '');
+		try {
+			term = encodeURIComponent(term);
+		} catch (e) {
+			return app.alertError('[[error:invalid-search-term]]');
+		}
+
 		var query = {
-			term: data.term,
+			term: term,
 			in: searchIn,
 		};
 
@@ -79,7 +86,11 @@ define('search', ['navigator', 'translator', 'storage'], function (nav, translat
 			query.showAs = data.showAs;
 		}
 
-		$(window).trigger('action:search.createQueryString', {
+		if (data.searchOnly) {
+			query.searchOnly = data.searchOnly;
+		}
+
+		hooks.fire('action:search.createQueryString', {
 			query: query,
 			data: data,
 		});
@@ -93,6 +104,39 @@ define('search', ['navigator', 'translator', 'storage'], function (nav, translat
 		} catch (e) {
 			return {};
 		}
+	};
+
+	Search.highlightMatches = function (searchQuery, els) {
+		if (!searchQuery || !els.length) {
+			return;
+		}
+		searchQuery = utils.escapeHTML(searchQuery.replace(/^"/, '').replace(/"$/, '').trim());
+		var regexStr = searchQuery.split(' ')
+			.map(function (word) { return utils.escapeRegexChars(word); })
+			.join('|');
+		var regex = new RegExp('(' + regexStr + ')', 'gi');
+
+		els.each(function () {
+			var result = $(this);
+			var nested = [];
+
+			result.find('*').each(function () {
+				$(this).after('<!-- ' + nested.length + ' -->');
+				nested.push($('<div></div>').append($(this)));
+			});
+
+			result.html(result.html().replace(regex, function (match, p1) {
+				return '<strong class="search-match">' + p1 + '</strong>';
+			}));
+
+			nested.forEach(function (nestedEl, i) {
+				result.html(result.html().replace('<!-- ' + i + ' -->', function () {
+					return nestedEl.html();
+				}));
+			});
+		});
+
+		$('.search-result-text').find('img:not(.not-responsive)').addClass('img-responsive');
 	};
 
 	Search.queryTopic = function (tid, term) {

@@ -1,106 +1,88 @@
 'use strict';
 
-var async = require('async');
-var db = require('../database');
-var batch = require('../batch');
-var plugins = require('../plugins');
-var topics = require('../topics');
-var groups = require('../groups');
-var privileges = require('../privileges');
+const async = require('async');
+const db = require('../database');
+const batch = require('../batch');
+const plugins = require('../plugins');
+const topics = require('../topics');
+const groups = require('../groups');
+const privileges = require('../privileges');
+const cache = require('../cache');
 
 module.exports = function (Categories) {
-	Categories.purge = function (cid, uid, callback) {
-		async.waterfall([
-			function (next) {
-				batch.processSortedSet('cid:' + cid + ':tids', function (tids, next) {
-					async.eachLimit(tids, 10, function (tid, next) {
-						topics.purgePostsAndTopic(tid, uid, next);
-					}, next);
-				}, { alwaysStartAt: 0 }, next);
-			},
-			function (next) {
-				db.getSortedSetRevRange('cid:' + cid + ':tids:pinned', 0, -1, next);
-			},
-			function (pinnedTids, next) {
-				async.eachLimit(pinnedTids, 10, function (tid, next) {
-					topics.purgePostsAndTopic(tid, uid, next);
-				}, next);
-			},
-			function (next) {
-				purgeCategory(cid, next);
-			},
-			function (next) {
-				plugins.fireHook('action:category.delete', { cid: cid, uid: uid });
-				next();
-			},
-		], callback);
+	Categories.purge = async function (cid, uid) {
+		await batch.processSortedSet(`cid:${cid}:tids`, async (tids) => {
+			await async.eachLimit(tids, 10, async (tid) => {
+				await topics.purgePostsAndTopic(tid, uid);
+			});
+		}, { alwaysStartAt: 0 });
+
+		const pinnedTids = await db.getSortedSetRevRange(`cid:${cid}:tids:pinned`, 0, -1);
+		await async.eachLimit(pinnedTids, 10, async (tid) => {
+			await topics.purgePostsAndTopic(tid, uid);
+		});
+		const categoryData = await Categories.getCategoryData(cid);
+		await purgeCategory(categoryData);
+		plugins.hooks.fire('action:category.delete', { cid: cid, uid: uid, category: categoryData });
 	};
 
-	function purgeCategory(cid, callback) {
-		async.series([
-			function (next) {
-				db.sortedSetRemove('categories:cid', cid, next);
-			},
-			function (next) {
-				removeFromParent(cid, next);
-			},
-			function (next) {
-				db.deleteAll([
-					'cid:' + cid + ':tids',
-					'cid:' + cid + ':tids:pinned',
-					'cid:' + cid + ':tids:posts',
-					'cid:' + cid + ':pids',
-					'cid:' + cid + ':read_by_uid',
-					'cid:' + cid + ':ignorers',
-					'cid:' + cid + ':children',
-					'cid:' + cid + ':tag:whitelist',
-					'category:' + cid,
-				], next);
-			},
-			function (next) {
-				groups.destroy(privileges.privilegeList.map(function (privilege) {
-					return 'cid:' + cid + ':privileges:' + privilege;
-				}), next);
-			},
-		], function (err) {
-			callback(err);
-		});
+	async function purgeCategory(categoryData) {
+		const { cid } = categoryData;
+		await db.sortedSetRemoveBulk([
+			['categories:cid', cid],
+			['categories:name', `${categoryData.name.substr(0, 200).toLowerCase()}:${cid}`],
+		]);
+		await removeFromParent(cid);
+		await deleteTags(cid);
+		await db.deleteAll([
+			`cid:${cid}:tids`,
+			`cid:${cid}:tids:pinned`,
+			`cid:${cid}:tids:posts`,
+			`cid:${cid}:tids:votes`,
+			`cid:${cid}:tids:lastposttime`,
+			`cid:${cid}:recent_tids`,
+			`cid:${cid}:pids`,
+			`cid:${cid}:read_by_uid`,
+			`cid:${cid}:uid:watch:state`,
+			`cid:${cid}:children`,
+			`cid:${cid}:tag:whitelist`,
+			`category:${cid}`,
+		]);
+		await groups.destroy(privileges.categories.privilegeList.map(privilege => `cid:${cid}:privileges:${privilege}`));
 	}
 
-	function removeFromParent(cid, callback) {
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					parentCid: function (next) {
-						Categories.getCategoryField(cid, 'parentCid', next);
-					},
-					children: function (next) {
-						db.getSortedSetRange('cid:' + cid + ':children', 0, -1, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				async.parallel([
-					function (next) {
-						results.parentCid = parseInt(results.parentCid, 10) || 0;
-						db.sortedSetRemove('cid:' + results.parentCid + ':children', cid, next);
-					},
-					function (next) {
-						async.each(results.children, function (cid, next) {
-							async.parallel([
-								function (next) {
-									db.setObjectField('category:' + cid, 'parentCid', 0, next);
-								},
-								function (next) {
-									db.sortedSetAdd('cid:0:children', cid, cid, next);
-								},
-							], next);
-						}, next);
-					},
-				], next);
-			},
-		], function (err) {
-			callback(err);
+	async function removeFromParent(cid) {
+		const [parentCid, children] = await Promise.all([
+			Categories.getCategoryField(cid, 'parentCid'),
+			db.getSortedSetRange(`cid:${cid}:children`, 0, -1),
+		]);
+
+		const bulkAdd = [];
+		const childrenKeys = children.map((cid) => {
+			bulkAdd.push(['cid:0:children', cid, cid]);
+			return `category:${cid}`;
 		});
+
+		await Promise.all([
+			db.sortedSetRemove(`cid:${parentCid}:children`, cid),
+			db.setObjectField(childrenKeys, 'parentCid', 0),
+			db.sortedSetAddBulk(bulkAdd),
+		]);
+
+		cache.del([
+			'categories:cid',
+			'cid:0:children',
+			`cid:${parentCid}:children`,
+			`cid:${parentCid}:children:all`,
+			`cid:${cid}:children`,
+			`cid:${cid}:children:all`,
+			`cid:${cid}:tag:whitelist`,
+		]);
+	}
+
+	async function deleteTags(cid) {
+		const tags = await db.getSortedSetMembers(`cid:${cid}:tags`);
+		await db.deleteAll(tags.map(tag => `cid:${cid}:tag:${tag}:topics`));
+		await db.delete(`cid:${cid}:tags`);
 	}
 };

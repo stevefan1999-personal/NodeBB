@@ -2,10 +2,15 @@
 'use strict';
 
 
-define('autocomplete', function () {
+define('autocomplete', ['api'], function (api) {
 	var module = {};
 
-	module.user = function (input, onselect) {
+	module.user = function (input, params, onselect) {
+		if (typeof params === 'function') {
+			onselect = params;
+			params = {};
+		}
+		params = params || {};
 		app.loadJQueryUI(function () {
 			input.autocomplete({
 				delay: 200,
@@ -16,17 +21,16 @@ define('autocomplete', function () {
 					handleOnSelect(input, onselect, event, ui);
 				},
 				source: function (request, response) {
-					socket.emit('user.search', {
-						query: request.term,
-						paginate: false,
-					}, function (err, result) {
+					params.query = request.term;
+
+					api.get('/api/users', params, function (err, result) {
 						if (err) {
 							return app.alertError(err.message);
 						}
 
 						if (result && result.users) {
 							var names = result.users.map(function (user) {
-								var username = $('<div/>').html(user.username).text();
+								var username = $('<div></div>').html(user.username).text();
 								return user && {
 									label: username,
 									value: username,
@@ -37,6 +41,7 @@ define('autocomplete', function () {
 										username: user.username,
 										userslug: user.userslug,
 										picture: user.picture,
+										banned: user.banned,
 										'icon:text': user['icon:text'],
 										'icon:bgColor': user['icon:bgColor'],
 									},
@@ -44,6 +49,7 @@ define('autocomplete', function () {
 							});
 							response(names);
 						}
+
 						$('.ui-autocomplete a').attr('data-ajaxify', 'false');
 					});
 				},
@@ -55,7 +61,12 @@ define('autocomplete', function () {
 		app.loadJQueryUI(function () {
 			input.autocomplete({
 				delay: 200,
-				select: onselect,
+				open: function () {
+					$(this).autocomplete('widget').css('z-index', 100005);
+				},
+				select: function (event, ui) {
+					handleOnSelect(input, onselect, event, ui);
+				},
 				source: function (request, response) {
 					socket.emit('groups.search', {
 						query: request.term,
@@ -63,16 +74,12 @@ define('autocomplete', function () {
 						if (err) {
 							return app.alertError(err.message);
 						}
-
 						if (results && results.length) {
 							var names = results.map(function (group) {
 								return group && {
 									label: group.name,
 									value: group.name,
-									group: {
-										name: group.name,
-										slug: group.slug,
-									},
+									group: group,
 								};
 							});
 							response(names);
@@ -113,7 +120,7 @@ define('autocomplete', function () {
 	};
 
 	function handleOnSelect(input, onselect, event, ui) {
-		onselect = onselect || function () {};
+		onselect = onselect || function () { };
 		var e = jQuery.Event('keypress');
 		e.which = 13;
 		e.keyCode = 13;

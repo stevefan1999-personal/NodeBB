@@ -17,6 +17,7 @@
     "at-most": "Щонайбільше",
     "relevance": "Релевантність",
     "post-time": "Час посту",
+    "votes": "Голоси",
     "newer-than": "Новіші за",
     "older-than": "Старіші за",
     "any-date": "Будь-яка дата",
@@ -30,6 +31,7 @@
     "sort-by": "Сортувати за",
     "last-reply-time": "Час останньої відповіді",
     "topic-title": "Заголовок теми",
+    "topic-votes": "Голоси за тему",
     "number-of-replies": "Кількість відповідей",
     "number-of-views": "Кількість переглядів",
     "topic-start-date": "Час початку теми",
@@ -41,5 +43,7 @@
     "clear-preferences": "Очистити налаштування",
     "search-preferences-saved": "Налаштування пошуку збережено",
     "search-preferences-cleared": "Налаштування пошуку очищені",
-    "show-results-as": "Показати результати як"
+    "show-results-as": "Показати результати як",
+    "see-more-results": "Дивитись більше результатів (%1)",
+    "search-in-category": "Search in \"%1\""
 }

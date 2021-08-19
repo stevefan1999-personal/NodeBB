@@ -1,42 +1,70 @@
 'use strict';
 
-define('navigator', ['forum/pagination', 'components'], function (pagination, components) {
+define('navigator', ['forum/pagination', 'components', 'hooks'], function (pagination, components, hooks) {
 	var navigator = {};
-	var index = 1;
+	var index = 0;
 	var count = 0;
 	var navigatorUpdateTimeoutId;
 
+	var renderPostIntervalId;
+	var touchX;
+	var touchY;
+	var renderPostIndex;
+	var isNavigating = false;
+	var firstMove = true;
+
 	navigator.scrollActive = false;
+
+	var paginationBlockEl = $('.pagination-block');
+	var paginationTextEl = paginationBlockEl.find('.pagination-text');
+	var paginationBlockMeterEl = paginationBlockEl.find('meter');
+	var paginationBlockProgressEl = paginationBlockEl.find('.progress-bar');
+	var thumb;
+	var thumbText;
+	var thumbIcon;
+	var thumbIconHeight;
+	var thumbIconHalfHeight;
 
 	$(window).on('action:ajaxify.start', function () {
 		$(window).off('keydown', onKeyDown);
 	});
 
-	navigator.init = function (selector, count, toTop, toBottom, callback, calculateIndex) {
-		index = 1;
+	navigator.init = function (selector, count, toTop, toBottom, callback) {
+		index = 0;
 		navigator.selector = selector;
 		navigator.callback = callback;
 		navigator.toTop = toTop || function () {};
 		navigator.toBottom = toBottom || function () {};
 
+		paginationBlockEl = $('.pagination-block');
+		paginationTextEl = paginationBlockEl.find('.pagination-text');
+		paginationBlockMeterEl = paginationBlockEl.find('meter');
+		paginationBlockProgressEl = paginationBlockEl.find('.progress-bar');
+
+		thumbIcon = $('.scroller-thumb-icon');
+		thumbIconHeight = thumbIcon.height();
+		thumbIconHalfHeight = thumbIconHeight / 2;
+		thumb = $('.scroller-thumb');
+		thumbText = thumb.find('.thumb-text');
+
+
 		$(window).off('scroll', navigator.delayedUpdate).on('scroll', navigator.delayedUpdate);
 
-		$('.pagination-block .dropdown-menu').off('click').on('click', function (e) {
+		paginationBlockEl.find('.dropdown-menu').off('click').on('click', function (e) {
 			e.stopPropagation();
 		});
 
-		$('.pagination-block').off('shown.bs.dropdown', '.dropdown').on('shown.bs.dropdown', '.dropdown', function () {
+		paginationBlockEl.off('shown.bs.dropdown', '.dropdown').on('shown.bs.dropdown', '.dropdown', function () {
 			setTimeout(function () {
 				$('.pagination-block input').focus();
 			}, 100);
 		});
+		paginationBlockEl.find('.pageup').off('click').on('click', navigator.scrollUp);
+		paginationBlockEl.find('.pagedown').off('click').on('click', navigator.scrollDown);
+		paginationBlockEl.find('.pagetop').off('click').on('click', navigator.toTop);
+		paginationBlockEl.find('.pagebottom').off('click').on('click', navigator.toBottom);
 
-		$('.pagination-block .pageup').off('click').on('click', navigator.scrollUp);
-		$('.pagination-block .pagedown').off('click').on('click', navigator.scrollDown);
-		$('.pagination-block .pagetop').off('click').on('click', navigator.toTop);
-		$('.pagination-block .pagebottom').off('click').on('click', navigator.toBottom);
-
-		$('.pagination-block input').on('keydown', function (e) {
+		paginationBlockEl.find('input').on('keydown', function (e) {
 			if (e.which === 13) {
 				var input = $(this);
 				if (!utils.isNumber(input.val())) {
@@ -45,10 +73,6 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 				}
 
 				var index = parseInt(input.val(), 10);
-				if (typeof calculateIndex === 'function') {
-					index = calculateIndex(index, count);
-				}
-
 				var url = generateUrl(index);
 				input.val('');
 				$('.pagination-block .dropdown-toggle').trigger('click');
@@ -56,11 +80,189 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 			}
 		});
 
+		if (ajaxify.data.template.topic) {
+			handleScrollNav();
+		}
+
 		handleKeys();
 
 		navigator.setCount(count);
 		navigator.update(0);
 	};
+
+	function clampTop(newTop) {
+		var parent = thumb.parent();
+		var parentOffset = parent.offset();
+		if (newTop < parentOffset.top) {
+			newTop = parentOffset.top;
+		} else if (newTop > parentOffset.top + parent.height() - thumbIconHeight) {
+			newTop = parentOffset.top + parent.height() - thumbIconHeight;
+		}
+		return newTop;
+	}
+
+	function setThumbToIndex(index) {
+		if (!thumb.length || thumb.is(':hidden')) {
+			return;
+		}
+		var parent = thumb.parent();
+		var parentOffset = parent.offset();
+		var percent = (index - 1) / ajaxify.data.postcount;
+		if (index === count) {
+			percent = 1;
+		}
+		var newTop = clampTop(parentOffset.top + ((parent.height() - thumbIconHeight) * percent));
+
+		var offset = { top: newTop, left: thumb.offset().left };
+		thumb.offset(offset);
+		thumbText.text(index + '/' + ajaxify.data.postcount);
+		renderPost(index);
+	}
+
+	function handleScrollNav() {
+		if (!thumb.length) {
+			return;
+		}
+
+		var parent = thumb.parent();
+		parent.on('click', function (ev) {
+			if ($(ev.target).hasClass('scroller-container')) {
+				var index = calculateIndexFromY(ev.pageY);
+				navigator.scrollToIndex(index - 1, true, 0);
+				return false;
+			}
+		});
+
+		function calculateIndexFromY(y) {
+			var newTop = clampTop(y - thumbIconHalfHeight);
+			var parentOffset = parent.offset();
+			var percent = (newTop - parentOffset.top) / (parent.height() - thumbIconHeight);
+			index = Math.max(1, Math.ceil(ajaxify.data.postcount * percent));
+			return index > ajaxify.data.postcount ? ajaxify.data.count : index;
+		}
+
+		var mouseDragging = false;
+		hooks.on('action:ajaxify.end', function () {
+			renderPostIndex = null;
+		});
+		$('.pagination-block .dropdown-menu').parent().on('shown.bs.dropdown', function () {
+			setThumbToIndex(index);
+		});
+
+		thumb.on('mousedown', function () {
+			mouseDragging = true;
+			$(window).on('mousemove', mousemove);
+			firstMove = true;
+		});
+
+		function mouseup() {
+			$(window).off('mousemove', mousemove);
+			if (mouseDragging) {
+				navigator.scrollToIndex(index - 1, true, 0);
+				paginationBlockEl.find('[data-toggle="dropdown"]').trigger('click');
+			}
+			clearRenderInterval();
+			mouseDragging = false;
+			firstMove = false;
+		}
+
+		function mousemove(ev) {
+			var newTop = clampTop(ev.pageY - thumbIconHalfHeight);
+			thumb.offset({ top: newTop, left: thumb.offset().left });
+			var index = calculateIndexFromY(ev.pageY);
+			navigator.updateTextAndProgressBar();
+			thumbText.text(index + '/' + ajaxify.data.postcount);
+			if (firstMove) {
+				delayedRenderPost();
+			}
+			firstMove = false;
+			ev.stopPropagation();
+			return false;
+		}
+
+		function delayedRenderPost() {
+			clearRenderInterval();
+			renderPostIntervalId = setInterval(function () {
+				renderPost(index);
+			}, 250);
+		}
+
+		$(window).off('mousemove', mousemove);
+		$(window).off('mouseup', mouseup).on('mouseup', mouseup);
+
+		thumb.on('touchstart', function (ev) {
+			isNavigating = true;
+			touchX = Math.min($(window).width(), Math.max(0, ev.touches[0].clientX));
+			touchY = Math.min($(window).height(), Math.max(0, ev.touches[0].clientY));
+			firstMove = true;
+		});
+
+		thumb.on('touchmove', function (ev) {
+			var windowWidth = $(window).width();
+			var windowHeight = $(window).height();
+			var deltaX = Math.abs(touchX - Math.min(windowWidth, Math.max(0, ev.touches[0].clientX)));
+			var deltaY = Math.abs(touchY - Math.min(windowHeight, Math.max(0, ev.touches[0].clientY)));
+			touchX = Math.min(windowWidth, Math.max(0, ev.touches[0].clientX));
+			touchY = Math.min(windowHeight, Math.max(0, ev.touches[0].clientY));
+
+			if (deltaY >= deltaX && firstMove) {
+				isNavigating = true;
+				delayedRenderPost();
+			}
+
+			if (isNavigating && ev.cancelable) {
+				ev.preventDefault();
+				ev.stopPropagation();
+				var newTop = clampTop(touchY + $(window).scrollTop() - thumbIconHalfHeight);
+				thumb.offset({ top: newTop, left: thumb.offset().left });
+				var index = calculateIndexFromY(touchY + $(window).scrollTop());
+				navigator.updateTextAndProgressBar();
+				thumbText.text(index + '/' + ajaxify.data.postcount);
+				if (firstMove) {
+					renderPost(index);
+				}
+			}
+			firstMove = false;
+		});
+
+		thumb.on('touchend', function () {
+			clearRenderInterval();
+			if (isNavigating) {
+				navigator.scrollToIndex(index - 1, true, 0);
+				isNavigating = false;
+				paginationBlockEl.find('[data-toggle="dropdown"]').trigger('click');
+			}
+		});
+	}
+
+	function clearRenderInterval() {
+		if (renderPostIntervalId) {
+			clearInterval(renderPostIntervalId);
+			renderPostIntervalId = 0;
+		}
+	}
+
+	function renderPost(index, callback) {
+		callback = callback || function () {};
+		if (renderPostIndex === index || paginationBlockEl.find('.post-content').is(':hidden')) {
+			return;
+		}
+		renderPostIndex = index;
+
+		socket.emit('posts.getPostSummaryByIndex', { tid: ajaxify.data.tid, index: index - 1 }, function (err, postData) {
+			if (err) {
+				return app.alertError(err.message);
+			}
+			app.parseAndTranslate('partials/topic/navigation-post', { post: postData }, function (html) {
+				paginationBlockEl
+					.find('.post-content')
+					.html(html)
+					.find('.timeago').timeago();
+			});
+
+			callback();
+		});
+	}
 
 	function handleKeys() {
 		if (!config.usePagination) {
@@ -90,7 +292,11 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 	}
 
 	navigator.setCount = function (value) {
-		count = parseInt(value, 10);
+		value = parseInt(value, 10);
+		if (value === count) {
+			return;
+		}
+		count = value;
 		navigator.updateTextAndProgressBar();
 	};
 
@@ -114,7 +320,7 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 			return;
 		}
 
-		$('.pagination-block').toggleClass('ready', flag);
+		paginationBlockEl.toggleClass('ready', flag);
 	}
 
 	navigator.delayedUpdate = function () {
@@ -132,10 +338,10 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 			a spot where a user is expecting to begin reading.
 		*/
 		threshold = typeof threshold === 'number' ? threshold : undefined;
-
+		var newIndex = index;
 		var els = $(navigator.selector);
 		if (els.length) {
-			index = parseInt(els.first().attr('data-index'), 10) + 1;
+			newIndex = parseInt(els.first().attr('data-index'), 10) + 1;
 		}
 
 		var scrollTop = $(window).scrollTop();
@@ -144,15 +350,18 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 		var middleOfViewport = scrollTop + (windowHeight / 2);
 		var previousDistance = Number.MAX_VALUE;
 		els.each(function () {
-			var distanceToMiddle = Math.abs(middleOfViewport - $(this).offset().top);
+			var $this = $(this);
+			var elIndex = parseInt($this.attr('data-index'), 10);
+			if (elIndex >= 0) {
+				var distanceToMiddle = Math.abs(middleOfViewport - ($this.offset().top + ($this.outerHeight(true) / 2)));
+				if (distanceToMiddle > previousDistance) {
+					return false;
+				}
 
-			if (distanceToMiddle > previousDistance) {
-				return false;
-			}
-
-			if (distanceToMiddle < previousDistance) {
-				index = parseInt($(this).attr('data-index'), 10) + 1;
-				previousDistance = distanceToMiddle;
+				if (distanceToMiddle < previousDistance) {
+					newIndex = elIndex + 1;
+					previousDistance = distanceToMiddle;
+				}
 			}
 		});
 
@@ -160,13 +369,13 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 		var nearBottom = scrollTop + windowHeight > documentHeight - 100 && parseInt(els.last().attr('data-index'), 10) === count - 1;
 
 		if (atTop) {
-			index = 1;
+			newIndex = 1;
 		} else if (nearBottom) {
-			index = count;
+			newIndex = count;
 		}
 
 		// If a threshold is undefined, try to determine one based on new index
-		if (threshold === undefined && ajaxify.data.template.topic === true) {
+		if (threshold === undefined && ajaxify.data.template.topic) {
 			if (atTop) {
 				threshold = 0;
 			} else {
@@ -179,10 +388,15 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 		}
 
 		if (typeof navigator.callback === 'function') {
-			navigator.callback(index, count, threshold);
+			navigator.callback(newIndex, count, threshold);
 		}
 
-		navigator.updateTextAndProgressBar();
+		if (newIndex !== index) {
+			index = newIndex;
+			navigator.updateTextAndProgressBar();
+			setThumbToIndex(index);
+		}
+
 		toggle(!!count);
 	};
 
@@ -191,25 +405,11 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 			return;
 		}
 		index = index > count ? count : index;
-		var relIndex = getRelativeIndex();
-		$('.pagination-block .pagination-text').translateHtml('[[global:pagination.out_of, ' + relIndex + ', ' + count + ']]');
-		var fraction = (relIndex - 1) / (count - 1 || 1);
-		$('.pagination-block meter').val(fraction);
-		$('.pagination-block .progress-bar').width((fraction * 100) + '%');
+		paginationTextEl.translateHtml('[[global:pagination.out_of, ' + index + ', ' + count + ']]');
+		var fraction = (index - 1) / (count - 1 || 1);
+		paginationBlockMeterEl.val(fraction);
+		paginationBlockProgressEl.width((fraction * 100) + '%');
 	};
-
-	function getRelativeIndex() {
-		var relIndex = index;
-		if (relIndex === 1) {
-			return 1;
-		}
-		if (ajaxify.data.template.topic) {
-			if (config.topicPostSort === 'most_votes' || config.topicPostSort === 'newest_to_oldest') {
-				relIndex = ajaxify.data.postcount - index + 2;
-			}
-		}
-		return relIndex;
-	}
 
 	navigator.scrollUp = function () {
 		var $window = $(window);
@@ -291,18 +491,8 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 		}
 
 		var scrollMethod = inTopic ? navigator.scrollToPostIndex : navigator.scrollToTopicIndex;
-		if (inTopic) {
-			if (config.topicPostSort === 'most_votes' || config.topicPostSort === 'newest_to_oldest') {
-				index = ajaxify.data.postcount - index;
-			}
-		} else if (inCategory) {
-			if (config.categoryTopicSort === 'most_posts' || config.categoryTopicSort === 'oldest_to_newest') {
-				index = ajaxify.data.topic_count - index;
-			}
-		}
 
-		var page = Math.max(1, Math.ceil((index + 1) / config.postsPerPage));
-
+		var page = 1 + Math.floor(index / config.postsPerPage);
 		if (parseInt(page, 10) !== ajaxify.data.pagination.currentPage) {
 			pagination.loadPage(page, function () {
 				scrollMethod(index, highlight, duration);
@@ -327,33 +517,29 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 			navigator.scrollActive = false;
 			return;
 		}
-		var postHeight = scrollTo.height();
+
+		var postHeight = scrollTo.outerHeight(true);
+		var navbarHeight = components.get('navbar').outerHeight(true);
+		var topicHeaderHeight = $('.topic-header').outerHeight(true) || 0;
 		var viewportHeight = $(window).height();
-		var navbarHeight = components.get('navbar').height();
 
 		// Temporarily disable navigator update on scroll
-		$(window).off('scroll', navigator.update);
+		$(window).off('scroll', navigator.delayedUpdate);
 
 		duration = duration !== undefined ? duration : 400;
 		navigator.scrollActive = true;
 		var done = false;
 
 		function animateScroll() {
-			var scrollTop = 0;
-			if (postHeight < viewportHeight) {
-				scrollTop = (scrollTo.offset().top - (viewportHeight / 2) + (postHeight / 2));
-			} else {
-				scrollTop = scrollTo.offset().top - navbarHeight;
+			function reenableScroll() {
+				// Re-enable onScroll behaviour
+				$(window).on('scroll', navigator.delayedUpdate);
+				var scrollToRect = scrollTo.get(0).getBoundingClientRect();
+				navigator.update(scrollToRect.top);
 			}
-
-			$('html, body').animate({
-				scrollTop: scrollTop + 'px',
-			}, duration, function () {
+			function onAnimateComplete() {
 				if (done) {
-					// Re-enable onScroll behaviour
-					$(window).on('scroll', navigator.update);
-					var scrollToRect = scrollTo.get(0).getBoundingClientRect();
-					navigator.update(scrollToRect.top);
+					reenableScroll();
 					return;
 				}
 				done = true;
@@ -362,11 +548,29 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 				highlightPost();
 				$('body').scrollTop($('body').scrollTop() - 1);
 				$('html').scrollTop($('html').scrollTop() - 1);
-			});
+			}
+
+			var scrollTop = 0;
+			if (postHeight < viewportHeight - navbarHeight - topicHeaderHeight) {
+				scrollTop = scrollTo.offset().top - (viewportHeight / 2) + (postHeight / 2);
+			} else {
+				scrollTop = scrollTo.offset().top - navbarHeight - topicHeaderHeight;
+			}
+
+			if (duration === 0) {
+				$(window).scrollTop(scrollTop);
+				onAnimateComplete();
+				reenableScroll();
+				return;
+			}
+			$('html, body').animate({
+				scrollTop: scrollTop + 'px',
+			}, duration, onAnimateComplete);
 		}
 
 		function highlightPost() {
 			if (highlight) {
+				$('[component="post"],[component="category/topic"]').removeClass('highlight');
 				scrollTo.addClass('highlight');
 				setTimeout(function () {
 					scrollTo.removeClass('highlight');
@@ -379,3 +583,4 @@ define('navigator', ['forum/pagination', 'components'], function (pagination, co
 
 	return navigator;
 });
+

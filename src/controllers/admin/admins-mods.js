@@ -1,50 +1,43 @@
 'use strict';
 
-var async = require('async');
+const _ = require('lodash');
 
-var groups = require('../../groups');
-var categories = require('../../categories');
+const db = require('../../database');
+const groups = require('../../groups');
+const categories = require('../../categories');
+const privileges = require('../../privileges');
+const user = require('../../user');
 
-var AdminsMods = module.exports;
+const AdminsMods = module.exports;
 
-AdminsMods.get = function (req, res, next) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				admins: function (next) {
-					groups.get('administrators', { uid: req.uid }, next);
-				},
-				globalMods: function (next) {
-					groups.get('Global Moderators', { uid: req.uid }, next);
-				},
-				categories: function (next) {
-					getModeratorsOfCategories(req.uid, next);
-				},
-			}, next);
-		},
-		function (results) {
-			res.render('admin/manage/admins-mods', results);
-		},
-	], next);
+AdminsMods.get = async function (req, res, next) {
+	let cid = parseInt(req.query.cid, 10) || 0;
+	if (!cid) {
+		cid = (await db.getSortedSetRange('cid:0:children', 0, 0))[0];
+	}
+	const selectedCategory = await categories.getCategoryData(cid);
+	if (!selectedCategory) {
+		return next();
+	}
+	const [admins, globalMods, moderators] = await Promise.all([
+		groups.get('administrators', { uid: req.uid }),
+		groups.get('Global Moderators', { uid: req.uid }),
+		getModeratorsOfCategories(selectedCategory),
+	]);
+
+	res.render('admin/manage/admins-mods', {
+		admins: admins,
+		globalMods: globalMods,
+		categoryMods: [moderators],
+		selectedCategory: selectedCategory,
+		allPrivileges: privileges.categories.userPrivilegeList,
+	});
 };
 
-function getModeratorsOfCategories(uid, callback) {
-	async.waterfall([
-		function (next) {
-			categories.buildForSelect(uid, 'find', next);
-		},
-		function (categoryData, next) {
-			async.map(categoryData, function (category, next) {
-				async.waterfall([
-					function (next) {
-						categories.getModerators(category.cid, next);
-					},
-					function (moderators, next) {
-						category.moderators = moderators;
-						next(null, category);
-					},
-				], next);
-			}, next);
-		},
-	], callback);
+async function getModeratorsOfCategories(categoryData) {
+	const moderatorUids = await categories.getModeratorUids([categoryData.cid]);
+	const uids = _.uniq(_.flatten(moderatorUids));
+	const moderatorData = await user.getUsersFields(uids, ['uid', 'username', 'userslug', 'picture']);
+	categoryData.moderators = moderatorData;
+	return categoryData;
 }

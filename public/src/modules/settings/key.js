@@ -42,8 +42,22 @@ define('settings/key', function () {
 	 @returns Key | null The Key-Object the focused element should be set to.
 	 */
 	function getKey(event) {
-		var anyModChange = event.ctrlKey !== lastKey.c || event.altKey !== lastKey.a || event.shiftKey !== lastKey.s || event.metaKey !== lastKey.m;
-		var modChange = event.ctrlKey + event.altKey + event.shiftKey + event.metaKey - lastKey.c - lastKey.a - lastKey.s - lastKey.m;
+		var anyModChange = (
+			event.ctrlKey !== lastKey.c ||
+			event.altKey !== lastKey.a ||
+			event.shiftKey !== lastKey.s ||
+			event.metaKey !== lastKey.m
+		);
+		var modChange = (
+			event.ctrlKey +
+			event.altKey +
+			event.shiftKey +
+			event.metaKey -
+			lastKey.c -
+			lastKey.a -
+			lastKey.s -
+			lastKey.m
+		);
 		var key = new Key();
 		key.c = event.ctrlKey;
 		key.a = event.altKey;
@@ -141,28 +155,28 @@ define('settings/key', function () {
 		for (var i = 0; i < parts.length; i += 1) {
 			var part = parts[i];
 			switch (part) {
-			case 'C':
-			case 'Ctrl':
-				key.c = true;
-				break;
-			case 'A':
-			case 'Alt':
-				key.a = true;
-				break;
-			case 'S':
-			case 'Shift':
-				key.s = true;
-				break;
-			case 'M':
-			case 'Meta':
-				key.m = true;
-				break;
-			default:
-				var num = /\d+/.exec(part);
-				if (num != null) {
-					key.code = num[0];
-				}
-				key.char = convertKeyCodeToChar(key.code);
+				case 'C':
+				case 'Ctrl':
+					key.c = true;
+					break;
+				case 'A':
+				case 'Alt':
+					key.a = true;
+					break;
+				case 'S':
+				case 'Shift':
+					key.s = true;
+					break;
+				case 'M':
+				case 'Meta':
+					key.m = true;
+					break;
+				default:
+					var num = /\d+/.exec(part);
+					if (num != null) {
+						key.code = num[0];
+					}
+					key.char = convertKeyCodeToChar(key.code);
 			}
 		}
 		return key;

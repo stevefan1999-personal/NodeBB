@@ -1,96 +1,83 @@
 'use strict';
 
-var fs = require('fs');
-var path = require('path');
-var async = require('async');
+const fs = require('fs');
+const path = require('path');
+const utils = require('./utils');
+const { paths } = require('./constants');
+const plugins = require('./plugins');
 
-var Languages = module.exports;
-var languagesPath = path.join(__dirname, '../build/public/language');
+const Languages = module.exports;
+const languagesPath = path.join(__dirname, '../build/public/language');
 
-Languages.get = function (language, namespace, callback) {
-	fs.readFile(path.join(languagesPath, language, namespace + '.json'), { encoding: 'utf-8' }, function (err, data) {
-		if (err) {
-			return callback(err);
-		}
+const files = fs.readdirSync(path.join(paths.nodeModules, '/timeago/locales'));
+Languages.timeagoCodes = files.filter(f => f.startsWith('jquery.timeago')).map(f => f.split('.')[2]);
 
-		try {
-			data = JSON.parse(data) || {};
-		} catch (e) {
-			return callback(e);
-		}
-
-		callback(null, data);
+Languages.get = async function (language, namespace) {
+	const data = await fs.promises.readFile(path.join(languagesPath, language, `${namespace}.json`), 'utf8');
+	const parsed = JSON.parse(data) || {};
+	const result = await plugins.hooks.fire('filter:languages.get', {
+		language,
+		namespace,
+		data: parsed,
 	});
+	return result.data;
 };
 
-var codeCache = null;
-Languages.listCodes = function (callback) {
+let codeCache = null;
+Languages.listCodes = async function () {
 	if (codeCache && codeCache.length) {
-		return callback(null, codeCache);
+		return codeCache;
 	}
+	try {
+		const file = await fs.promises.readFile(path.join(languagesPath, 'metadata.json'), 'utf8');
+		const parsed = JSON.parse(file);
 
-	fs.readFile(path.join(languagesPath, 'metadata.json'), 'utf8', function (err, file) {
-		if (err && err.code === 'ENOENT') {
-			return callback(null, []);
+		codeCache = parsed.languages;
+		return parsed.languages;
+	} catch (err) {
+		if (err.code === 'ENOENT') {
+			return [];
 		}
-		if (err) {
-			return callback(err);
-		}
-
-		var parsed;
-		try {
-			parsed = JSON.parse(file);
-		} catch (e) {
-			return callback(e);
-		}
-
-		var langs = parsed.languages;
-		codeCache = langs;
-		callback(null, langs);
-	});
+		throw err;
+	}
 };
 
-var listCache = null;
-Languages.list = function (callback) {
+let listCache = null;
+Languages.list = async function () {
 	if (listCache && listCache.length) {
-		return callback(null, listCache);
+		return listCache;
 	}
 
-	Languages.listCodes(function (err, codes) {
-		if (err) {
-			return callback(err);
-		}
+	const codes = await Languages.listCodes();
 
-		async.map(codes, function (folder, next) {
-			var configPath = path.join(languagesPath, folder, 'language.json');
-
-			fs.readFile(configPath, 'utf8', function (err, file) {
-				if (err && err.code === 'ENOENT') {
-					return next();
-				}
-				if (err) {
-					return next(err);
-				}
-				var lang;
-				try {
-					lang = JSON.parse(file);
-				} catch (e) {
-					return next(e);
-				}
-				next(null, lang);
-			});
-		}, function (err, languages) {
-			if (err) {
-				return callback(err);
+	let languages = await Promise.all(codes.map(async (folder) => {
+		try {
+			const configPath = path.join(languagesPath, folder, 'language.json');
+			const file = await fs.promises.readFile(configPath, 'utf8');
+			const lang = JSON.parse(file);
+			return lang;
+		} catch (err) {
+			if (err.code === 'ENOENT') {
+				return;
 			}
+			throw err;
+		}
+	}));
 
-			// filter out invalid ones
-			languages = languages.filter(function (lang) {
-				return lang && lang.code && lang.name && lang.dir;
-			});
+	// filter out invalid ones
+	languages = languages.filter(lang => lang && lang.code && lang.name && lang.dir);
 
-			listCache = languages;
-			callback(null, languages);
-		});
-	});
+	listCache = languages;
+	return languages;
 };
+
+Languages.userTimeagoCode = async function (userLang) {
+	const languageCodes = await Languages.listCodes();
+	const timeagoCode = utils.userLangToTimeagoCode(userLang);
+	if (languageCodes.includes(userLang) && Languages.timeagoCodes.includes(timeagoCode)) {
+		return timeagoCode;
+	}
+	return '';
+};
+
+require('./promisify')(Languages);

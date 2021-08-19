@@ -1,69 +1,66 @@
 'use strict';
 
-var mkdirp = require('mkdirp');
-var rimraf = require('rimraf');
-var winston = require('winston');
-var async = require('async');
-var path = require('path');
-var fs = require('fs');
-var nconf = require('nconf');
-var _ = require('lodash');
-var Benchpress = require('benchpressjs');
+const util = require('util');
+let mkdirp = require('mkdirp');
 
-var plugins = require('../plugins');
-var file = require('../file');
-var db = require('../database');
+mkdirp = mkdirp.hasOwnProperty('native') ? mkdirp : util.promisify(mkdirp);
+const rimraf = require('rimraf');
+const winston = require('winston');
+const path = require('path');
+const fs = require('fs');
 
-var viewsPath = nconf.get('views_dir');
+const nconf = require('nconf');
+const _ = require('lodash');
+const Benchpress = require('benchpressjs');
 
-var Templates = module.exports;
+const plugins = require('../plugins');
+const file = require('../file');
+const db = require('../database');
+const { themeNamePattern, paths } = require('../constants');
 
-function processImports(paths, templatePath, source, callback) {
-	var regex = /<!-- IMPORT (.+?) -->/;
+const viewsPath = nconf.get('views_dir');
 
-	var matches = source.match(regex);
+const Templates = module.exports;
+
+async function processImports(paths, templatePath, source) {
+	const regex = /<!-- IMPORT (.+?) -->/;
+
+	const matches = source.match(regex);
 
 	if (!matches) {
-		return callback(null, source);
+		return source;
 	}
 
-	var partial = matches[1];
+	const partial = matches[1];
 	if (paths[partial] && templatePath !== partial) {
-		fs.readFile(paths[partial], 'utf8', function (err, partialSource) {
-			if (err) {
-				return callback(err);
-			}
-
-			source = source.replace(regex, partialSource);
-			processImports(paths, templatePath, source, callback);
-		});
-	} else {
-		winston.warn('[meta/templates] Partial not loaded: ' + matches[1]);
-		source = source.replace(regex, '');
-
-		processImports(paths, templatePath, source, callback);
+		const partialSource = await fs.promises.readFile(paths[partial], 'utf8');
+		source = source.replace(regex, partialSource);
+		return await processImports(paths, templatePath, source);
 	}
+
+	winston.warn(`[meta/templates] Partial not loaded: ${matches[1]}`);
+	source = source.replace(regex, '');
+
+	return await processImports(paths, templatePath, source);
 }
 Templates.processImports = processImports;
 
-var themeNamePattern = /^(@.*?\/)?nodebb-theme-.*$/;
-
-function getTemplateDirs(activePlugins, callback) {
-	var pluginTemplates = activePlugins.map(function (id) {
+async function getTemplateDirs(activePlugins) {
+	const pluginTemplates = activePlugins.map((id) => {
 		if (themeNamePattern.test(id)) {
 			return nconf.get('theme_templates_path');
 		}
 		if (!plugins.pluginsData[id]) {
 			return '';
 		}
-		return path.join(__dirname, '../../node_modules/', id, plugins.pluginsData[id].templates || 'templates');
+		return path.join(paths.nodeModules, id, plugins.pluginsData[id].templates || 'templates');
 	}).filter(Boolean);
 
-	var themeConfig = require(nconf.get('theme_config'));
-	var theme = themeConfig.baseTheme;
+	let themeConfig = require(nconf.get('theme_config'));
+	let theme = themeConfig.baseTheme;
 
-	var themePath;
-	var themeTemplates = [];
+	let themePath;
+	let themeTemplates = [];
 	while (theme) {
 		themePath = path.join(nconf.get('themes_path'), theme);
 		themeConfig = require(path.join(themePath, 'theme.json'));
@@ -75,128 +72,69 @@ function getTemplateDirs(activePlugins, callback) {
 	themeTemplates.push(nconf.get('base_templates_path'));
 	themeTemplates = _.uniq(themeTemplates.reverse());
 
-	var coreTemplatesPath = nconf.get('core_templates_path');
+	const coreTemplatesPath = nconf.get('core_templates_path');
 
-	var templateDirs = _.uniq([coreTemplatesPath].concat(themeTemplates, pluginTemplates));
+	let templateDirs = _.uniq([coreTemplatesPath].concat(themeTemplates, pluginTemplates));
 
-	async.filter(templateDirs, file.exists, callback);
+	templateDirs = await Promise.all(templateDirs.map(async path => (await file.exists(path) ? path : false)));
+	return templateDirs.filter(Boolean);
 }
 
-function getTemplateFiles(dirs, callback) {
-	async.waterfall([
-		function (cb) {
-			async.map(dirs, function (dir, next) {
-				file.walk(dir, function (err, files) {
-					if (err) { return next(err); }
+async function getTemplateFiles(dirs) {
+	const buckets = await Promise.all(dirs.map(async (dir) => {
+		let files = await file.walk(dir);
+		files = files.filter(path => path.endsWith('.tpl')).map(file => ({
+			name: path.relative(dir, file).replace(/\\/g, '/'),
+			path: file,
+		}));
+		return files;
+	}));
 
-					files = files.filter(function (path) {
-						return path.endsWith('.tpl');
-					}).map(function (file) {
-						return {
-							name: path.relative(dir, file).replace(/\\/g, '/'),
-							path: file,
-						};
-					});
-					next(null, files);
-				});
-			}, cb);
-		},
-		function (buckets, cb) {
-			var dict = {};
-			buckets.forEach(function (files) {
-				files.forEach(function (file) {
-					dict[file.name] = file.path;
-				});
-			});
+	const dict = {};
+	buckets.forEach((files) => {
+		files.forEach((file) => {
+			dict[file.name] = file.path;
+		});
+	});
 
-			cb(null, dict);
-		},
-	], callback);
+	return dict;
 }
 
-function compileTemplate(filename, source, callback) {
-	async.waterfall([
-		function (next) {
-			file.walk(viewsPath, next);
-		},
-		function (paths, next) {
-			paths = _.fromPairs(paths.map(function (p) {
-				var relative = path.relative(viewsPath, p).replace(/\\/g, '/');
-				return [relative, p];
-			}));
-			async.waterfall([
-				function (next) {
-					processImports(paths, filename, source, next);
-				},
-				function (source, next) {
-					Benchpress.precompile(source, {
-						minify: global.env !== 'development',
-					}, next);
-				},
-				function (compiled, next) {
-					fs.writeFile(path.join(viewsPath, filename.replace(/\.tpl$/, '.js')), compiled, next);
-				},
-			], next);
-		},
-	], callback);
+async function compileTemplate(filename, source) {
+	let paths = await file.walk(viewsPath);
+	paths = _.fromPairs(paths.map((p) => {
+		const relative = path.relative(viewsPath, p).replace(/\\/g, '/');
+		return [relative, p];
+	}));
+
+	source = await processImports(paths, filename, source);
+	const compiled = await Benchpress.precompile(source, { filename });
+	return await fs.promises.writeFile(path.join(viewsPath, filename.replace(/\.tpl$/, '.js')), compiled);
 }
 Templates.compileTemplate = compileTemplate;
 
-function compile(callback) {
-	callback = callback || function () {};
+async function compile() {
+	const _rimraf = util.promisify(rimraf);
 
-	async.waterfall([
-		function (next) {
-			rimraf(viewsPath, function (err) { next(err); });
-		},
-		function (next) {
-			mkdirp(viewsPath, function (err) { next(err); });
-		},
-		function (next) {
-			db.getSortedSetRange('plugins:active', 0, -1, next);
-		},
-		getTemplateDirs,
-		getTemplateFiles,
-		function (files, next) {
-			async.each(Object.keys(files), function (name, next) {
-				var filePath = files[name];
+	await _rimraf(viewsPath);
+	await mkdirp(viewsPath);
 
-				async.waterfall([
-					function (next) {
-						fs.readFile(filePath, 'utf8', next);
-					},
-					function (source, next) {
-						processImports(files, name, source, next);
-					},
-					function (source, next) {
-						mkdirp(path.join(viewsPath, path.dirname(name)), function (err) {
-							next(err, source);
-						});
-					},
-					function (imported, next) {
-						async.parallel([
-							function (cb) {
-								fs.writeFile(path.join(viewsPath, name), imported, cb);
-							},
-							function (cb) {
-								Benchpress.precompile(imported, { minify: global.env !== 'development' }, function (err, compiled) {
-									if (err) {
-										cb(err);
-										return;
-									}
+	let files = await db.getSortedSetRange('plugins:active', 0, -1);
+	files = await getTemplateDirs(files);
+	files = await getTemplateFiles(files);
 
-									fs.writeFile(path.join(viewsPath, name.replace(/\.tpl$/, '.js')), compiled, cb);
-								});
-							},
-						], next);
-					},
-				], next);
-			}, next);
-		},
-		function (next) {
-			winston.verbose('[meta/templates] Successfully compiled templates.');
-			next();
-		},
-	], callback);
+	await Promise.all(Object.keys(files).map(async (name) => {
+		const filePath = files[name];
+		let imported = await fs.promises.readFile(filePath, 'utf8');
+		imported = await processImports(files, name, imported);
+
+		await mkdirp(path.join(viewsPath, path.dirname(name)));
+
+		await fs.promises.writeFile(path.join(viewsPath, name), imported);
+		const compiled = await Benchpress.precompile(imported, { filename: name });
+		await fs.promises.writeFile(path.join(viewsPath, name.replace(/\.tpl$/, '.js')), compiled);
+	}));
+
+	winston.verbose('[meta/templates] Successfully compiled templates.');
 }
 Templates.compile = compile;

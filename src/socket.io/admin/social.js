@@ -1,8 +1,9 @@
 'use strict';
 
-var social = require('../../social');
-var SocketSocial = module.exports;
+const social = require('../../social');
 
-SocketSocial.savePostSharingNetworks = function (socket, data, callback) {
-	social.setActivePostSharingNetworks(data, callback);
+const SocketSocial = module.exports;
+
+SocketSocial.savePostSharingNetworks = async function (socket, data) {
+	await social.setActivePostSharingNetworks(data);
 };

@@ -1,54 +1,38 @@
 'use strict';
 
-var async = require('async');
-
-var db = require('../database');
+const db = require('../database');
 
 module.exports = function (Categories) {
-	Categories.markAsRead = function (cids, uid, callback) {
-		callback = callback || function () {};
-		if (!Array.isArray(cids) || !cids.length) {
-			return callback();
+	Categories.markAsRead = async function (cids, uid) {
+		if (!Array.isArray(cids) || !cids.length || parseInt(uid, 10) <= 0) {
+			return;
 		}
-		var keys = cids.map(function (cid) {
-			return 'cid:' + cid + ':read_by_uid';
-		});
-
-		async.waterfall([
-			function (next) {
-				db.isMemberOfSets(keys, uid, next);
-			},
-			function (hasRead, next) {
-				keys = keys.filter(function (key, index) {
-					return !hasRead[index];
-				});
-
-				if (!keys.length) {
-					return callback();
-				}
-
-				db.setsAdd(keys, uid, next);
-			},
-		], callback);
+		let keys = cids.map(cid => `cid:${cid}:read_by_uid`);
+		const hasRead = await db.isMemberOfSets(keys, uid);
+		keys = keys.filter((key, index) => !hasRead[index]);
+		await db.setsAdd(keys, uid);
 	};
 
-	Categories.markAsUnreadForAll = function (cid, callback) {
+	Categories.markAsUnreadForAll = async function (cid) {
 		if (!parseInt(cid, 10)) {
-			return callback();
+			return;
 		}
-		callback = callback || function () {};
-		db.delete('cid:' + cid + ':read_by_uid', callback);
+		await db.delete(`cid:${cid}:read_by_uid`);
 	};
 
-	Categories.hasReadCategories = function (cids, uid, callback) {
-		var sets = cids.map(function (cid) {
-			return 'cid:' + cid + ':read_by_uid';
-		});
+	Categories.hasReadCategories = async function (cids, uid) {
+		if (parseInt(uid, 10) <= 0) {
+			return cids.map(() => false);
+		}
 
-		db.isMemberOfSets(sets, uid, callback);
+		const sets = cids.map(cid => `cid:${cid}:read_by_uid`);
+		return await db.isMemberOfSets(sets, uid);
 	};
 
-	Categories.hasReadCategory = function (cid, uid, callback) {
-		db.isSetMember('cid:' + cid + ':read_by_uid', uid, callback);
+	Categories.hasReadCategory = async function (cid, uid) {
+		if (parseInt(uid, 10) <= 0) {
+			return false;
+		}
+		return await db.isSetMember(`cid:${cid}:read_by_uid`, uid);
 	};
 };

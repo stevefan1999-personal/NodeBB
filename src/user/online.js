@@ -1,70 +1,43 @@
 'use strict';
 
-var async = require('async');
-
-var db = require('../database');
-var topics = require('../topics');
-var plugins = require('../plugins');
+const db = require('../database');
+const topics = require('../topics');
+const plugins = require('../plugins');
+const meta = require('../meta');
 
 module.exports = function (User) {
-	User.updateLastOnlineTime = function (uid, callback) {
-		callback = callback || function () {};
-		db.getObjectFields('user:' + uid, ['status', 'lastonline'], function (err, userData) {
-			var now = Date.now();
-			if (err || userData.status === 'offline' || now - parseInt(userData.lastonline, 10) < 300000) {
-				return callback(err);
-			}
-			User.setUserField(uid, 'lastonline', now, callback);
-		});
+	User.updateLastOnlineTime = async function (uid) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return;
+		}
+		const userData = await db.getObjectFields(`user:${uid}`, ['status', 'lastonline']);
+		const now = Date.now();
+		if (userData.status === 'offline' || now - parseInt(userData.lastonline, 10) < 300000) {
+			return;
+		}
+		await User.setUserField(uid, 'lastonline', now);
 	};
 
-	User.updateOnlineUsers = function (uid, callback) {
-		callback = callback || function () {};
-
-		var now = Date.now();
-		async.waterfall([
-			function (next) {
-				db.sortedSetScore('users:online', uid, next);
-			},
-			function (userOnlineTime, next) {
-				if (now - parseInt(userOnlineTime, 10) < 300000) {
-					return callback();
-				}
-				db.sortedSetAdd('users:online', now, uid, next);
-			},
-			function (next) {
-				topics.pushUnreadCount(uid);
-				plugins.fireHook('action:user.online', { uid: uid, timestamp: now });
-				next();
-			},
-		], callback);
+	User.updateOnlineUsers = async function (uid) {
+		if (!(parseInt(uid, 10) > 0)) {
+			return;
+		}
+		const now = Date.now();
+		const userOnlineTime = await db.sortedSetScore('users:online', uid);
+		if (now - parseInt(userOnlineTime, 10) < 300000) {
+			return;
+		}
+		await db.sortedSetAdd('users:online', now, uid);
+		topics.pushUnreadCount(uid);
+		plugins.hooks.fire('action:user.online', { uid: uid, timestamp: now });
 	};
 
-	User.isOnline = function (uid, callback) {
-		var now = Date.now();
-		async.waterfall([
-			function (next) {
-				if (Array.isArray(uid)) {
-					db.sortedSetScores('users:online', uid, next);
-				} else {
-					db.sortedSetScore('users:online', uid, next);
-				}
-			},
-			function (lastonline, next) {
-				function checkOnline(lastonline) {
-					return now - lastonline < 300000;
-				}
-
-				var isOnline;
-				if (Array.isArray(uid)) {
-					isOnline = uid.map(function (uid, index) {
-						return checkOnline(lastonline[index]);
-					});
-				} else {
-					isOnline = checkOnline(lastonline);
-				}
-				next(null, isOnline);
-			},
-		], callback);
+	User.isOnline = async function (uid) {
+		const now = Date.now();
+		const isArray = Array.isArray(uid);
+		uid = isArray ? uid : [uid];
+		const lastonline = await db.sortedSetScores('users:online', uid);
+		const isOnline = uid.map((uid, index) => (now - lastonline[index]) < (meta.config.onlineCutoff * 60000));
+		return isArray ? isOnline : isOnline[0];
 	};
 };

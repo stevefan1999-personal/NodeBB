@@ -1,127 +1,102 @@
 'use strict';
 
-var async = require('async');
-
-var meta = require('../meta');
-var plugins = require('../plugins');
-var db = require('../database');
-var user = require('../user');
+const meta = require('../meta');
+const plugins = require('../plugins');
+const db = require('../database');
+const user = require('../user');
 
 module.exports = function (Messaging) {
-	Messaging.sendMessage = function (data, callback) {
-		async.waterfall([
-			function (next) {
-				Messaging.checkContent(data.content, next);
-			},
-			function (next) {
-				Messaging.isUserInRoom(data.uid, data.roomId, next);
-			},
-			function (inRoom, next) {
-				if (!inRoom) {
-					return next(new Error('[[error:not-allowed]]'));
-				}
+	Messaging.sendMessage = async (data) => {
+		await Messaging.checkContent(data.content);
+		const inRoom = await Messaging.isUserInRoom(data.uid, data.roomId);
+		if (!inRoom) {
+			throw new Error('[[error:not-allowed]]');
+		}
 
-				Messaging.addMessage(data, next);
-			},
-		], callback);
+		return await Messaging.addMessage(data);
 	};
 
-	Messaging.checkContent = function (content, callback) {
+	Messaging.checkContent = async (content) => {
 		if (!content) {
-			return callback(new Error('[[error:invalid-chat-message]]'));
+			throw new Error('[[error:invalid-chat-message]]');
 		}
-		content = String(content);
 
-		var maximumChatMessageLength = (meta.config.maximumChatMessageLength || 1000);
-		if (content.length > maximumChatMessageLength) {
-			return callback(new Error('[[error:chat-message-too-long, ' + maximumChatMessageLength + ']]'));
+		const maximumChatMessageLength = meta.config.maximumChatMessageLength || 1000;
+		content = String(content).trim();
+		let { length } = content;
+		({ content, length } = await plugins.hooks.fire('filter:messaging.checkContent', { content, length }));
+		if (!content) {
+			throw new Error('[[error:invalid-chat-message]]');
 		}
-		callback();
+		if (length > maximumChatMessageLength) {
+			throw new Error(`[[error:chat-message-too-long, ${maximumChatMessageLength}]]`);
+		}
 	};
 
-	Messaging.addMessage = function (data, callback) {
-		var mid;
-		var message;
-		var isNewSet;
+	Messaging.addMessage = async (data) => {
+		const mid = await db.incrObjectField('global', 'nextMid');
+		const timestamp = data.timestamp || Date.now();
+		let message = {
+			content: String(data.content),
+			timestamp: timestamp,
+			fromuid: data.uid,
+			roomId: data.roomId,
+			deleted: 0,
+			system: data.system || 0,
+		};
 
-		async.waterfall([
-			function (next) {
-				Messaging.checkContent(data.content, next);
-			},
-			function (next) {
-				db.incrObjectField('global', 'nextMid', next);
-			},
-			function (_mid, next) {
-				mid = _mid;
-				message = {
-					content: String(data.content),
-					timestamp: data.timestamp,
-					fromuid: data.uid,
-					roomId: data.roomId,
-					deleted: 0,
-				};
-				if (data.ip) {
-					message.ip = data.ip;
-				}
+		if (data.ip) {
+			message.ip = data.ip;
+		}
 
-				plugins.fireHook('filter:messaging.save', message, next);
-			},
-			function (message, next) {
-				db.setObject('message:' + mid, message, next);
-			},
-			function (next) {
-				Messaging.isNewSet(data.uid, data.roomId, data.timestamp, next);
-			},
-			function (_isNewSet, next) {
-				isNewSet = _isNewSet;
-				db.getSortedSetRange('chat:room:' + data.roomId + ':uids', 0, -1, next);
-			},
-			function (uids, next) {
-				user.blocks.filterUids(data.uid, uids, next);
-			},
-			function (uids, next) {
-				async.parallel([
-					async.apply(Messaging.addRoomToUsers, data.roomId, uids, data.timestamp),
-					async.apply(Messaging.addMessageToUsers, data.roomId, uids, mid, data.timestamp),
-					async.apply(Messaging.markUnread, uids, data.roomId),
-				], next);
-			},
-			function (results, next) {
-				async.parallel({
-					markRead: async.apply(Messaging.markRead, data.uid, data.roomId),
-					messages: async.apply(Messaging.getMessagesData, [mid], data.uid, data.roomId, true),
-				}, next);
-			},
-			function (results, next) {
-				if (!results.messages || !results.messages[0]) {
-					return next(null, null);
-				}
+		message = await plugins.hooks.fire('filter:messaging.save', message);
+		await db.setObject(`message:${mid}`, message);
+		const isNewSet = await Messaging.isNewSet(data.uid, data.roomId, timestamp);
+		let uids = await db.getSortedSetRange(`chat:room:${data.roomId}:uids`, 0, -1);
+		uids = await user.blocks.filterUids(data.uid, uids);
 
-				results.messages[0].newSet = isNewSet;
-				results.messages[0].mid = mid;
-				results.messages[0].roomId = data.roomId;
-				next(null, results.messages[0]);
-			},
-		], callback);
+		await Promise.all([
+			Messaging.addRoomToUsers(data.roomId, uids, timestamp),
+			Messaging.addMessageToUsers(data.roomId, uids, mid, timestamp),
+			Messaging.markUnread(uids.filter(uid => uid !== String(data.uid)), data.roomId),
+		]);
+
+		const messages = await Messaging.getMessagesData([mid], data.uid, data.roomId, true);
+		if (!messages || !messages[0]) {
+			return null;
+		}
+
+		messages[0].newSet = isNewSet;
+		messages[0].mid = mid;
+		messages[0].roomId = data.roomId;
+		plugins.hooks.fire('action:messaging.save', { message: messages[0], data: data });
+		return messages[0];
 	};
 
-	Messaging.addRoomToUsers = function (roomId, uids, timestamp, callback) {
-		if (!uids.length) {
-			return callback();
-		}
-		var keys = uids.map(function (uid) {
-			return 'uid:' + uid + ':chat:rooms';
+	Messaging.addSystemMessage = async (content, uid, roomId) => {
+		const message = await Messaging.addMessage({
+			content: content,
+			uid: uid,
+			roomId: roomId,
+			system: 1,
 		});
-		db.sortedSetsAdd(keys, timestamp, roomId, callback);
+		Messaging.notifyUsersInRoom(uid, roomId, message);
 	};
 
-	Messaging.addMessageToUsers = function (roomId, uids, mid, timestamp, callback) {
+	Messaging.addRoomToUsers = async (roomId, uids, timestamp) => {
 		if (!uids.length) {
-			return callback();
+			return;
 		}
-		var keys = uids.map(function (uid) {
-			return 'uid:' + uid + ':chat:room:' + roomId + ':mids';
-		});
-		db.sortedSetsAdd(keys, timestamp, mid, callback);
+
+		const keys = uids.map(uid => `uid:${uid}:chat:rooms`);
+		await db.sortedSetsAdd(keys, timestamp, roomId);
+	};
+
+	Messaging.addMessageToUsers = async (roomId, uids, mid, timestamp) => {
+		if (!uids.length) {
+			return;
+		}
+		const keys = uids.map(uid => `uid:${uid}:chat:room:${roomId}:mids`);
+		await db.sortedSetsAdd(keys, timestamp, mid);
 	};
 };

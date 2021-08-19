@@ -4,14 +4,7 @@
 	if (typeof module === 'object' && module.exports) {
 		var winston = require('winston');
 
-
-		module.exports = factory(require('xregexp'));
-		module.exports.walk = function (dir, done) {
-			// DEPRECATED
-			var file = require('../../src/file');
-			winston.warn('[deprecated] `utils.walk` is deprecated. Use `file.walk` instead.');
-			file.walk(dir, done);
-		};
+		module.exports = factory(require('xregexp'), winston);
 
 		process.profile = function (operation, start) {
 			console.log('%s took %d milliseconds', operation, process.elapsedTimeSince(start));
@@ -22,9 +15,10 @@
 			return (diff[0] * 1e3) + (diff[1] / 1e6);
 		};
 	} else {
-		window.utils = factory(window.XRegExp);
+		window.utils = factory(window.XRegExp, console);
 	}
-}(function (XRegExp) {
+	// eslint-disable-next-line
+}(function (XRegExp, console) {
 	var freeze = Object.freeze || function (obj) { return obj; };
 
 	// add default escape function for escaping HTML entities
@@ -300,11 +294,13 @@
 
 	var utils = {
 		generateUUID: function () {
+			/* eslint-disable no-bitwise */
 			return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
 				var r = Math.random() * 16 | 0;
 				var v = c === 'x' ? r : ((r & 0x3) | 0x8);
 				return v.toString(16);
 			});
+			/* eslint-enable no-bitwise */
 		},
 		// https://github.com/substack/node-ent/blob/master/index.js
 		decodeHTMLEntities: function (html) {
@@ -330,39 +326,8 @@
 		},
 		// https://github.com/jprichardson/string.js/blob/master/lib/string.js
 		stripHTMLTags: function (str, tags) {
-			var pattern = (tags || ['']).map(function (tag) {
-				return utils.escapeRegexChars(tag);
-			}).join('|');
+			var pattern = (tags || ['']).join('|');
 			return String(str).replace(new RegExp('<(\\/)?(' + (pattern || '[^\\s>]+') + ')(\\s+[^<>]*?)?\\s*(\\/)?>', 'gi'), '');
-		},
-
-		invalidUnicodeChars: XRegExp('[^\\p{L}\\s\\d\\-_]', 'g'),
-		invalidLatinChars: /[^\w\s\d\-_]/g,
-		trimRegex: /^\s+|\s+$/g,
-		collapseWhitespace: /\s+/g,
-		collapseDash: /-+/g,
-		trimTrailingDash: /-$/g,
-		trimLeadingDash: /^-/g,
-		isLatin: /^[\w\d\s.,\-@]+$/,
-		languageKeyRegex: /\[\[[\w]+:.+\]\]/,
-
-		// http://dense13.com/blog/2009/05/03/converting-string-to-slug-javascript/
-		slugify: function (str, preserveCase) {
-			if (!str) {
-				return '';
-			}
-			str = str.replace(utils.trimRegex, '');
-			if (utils.isLatin.test(str)) {
-				str = str.replace(utils.invalidLatinChars, '-');
-			} else {
-				str = XRegExp.replace(str, utils.invalidUnicodeChars, '-');
-			}
-			str = !preserveCase ? str.toLocaleLowerCase() : str;
-			str = str.replace(utils.collapseWhitespace, '-');
-			str = str.replace(utils.collapseDash, '-');
-			str = str.replace(utils.trimTrailingDash, '');
-			str = str.replace(utils.trimLeadingDash, '');
-			return str;
 		},
 
 		cleanUpTag: function (tag, maxLength) {
@@ -391,7 +356,7 @@
 		},
 
 		isUserNameValid: function (name) {
-			return (name && name !== '' && (/^['"\s\-+.*0-9\u00BF-\u1FFF\u2C00-\uD7FF\w]+$/.test(name)));
+			return (name && name !== '' && (/^['" \-+.*[\]0-9\u00BF-\u1FFF\u2C00-\uD7FF\w]+$/.test(name)));
 		},
 
 		isPasswordValid: function (password) {
@@ -399,9 +364,11 @@
 		},
 
 		isNumber: function (n) {
+			// `isFinite('') === true` so isNan parseFloat check is necessary
 			return !isNaN(parseFloat(n)) && isFinite(n);
 		},
 
+		languageKeyRegex: /\[\[[\w]+:.+\]\]/,
 		hasLanguageKey: function (input) {
 			return utils.languageKeyRegex.test(input);
 		},
@@ -468,14 +435,43 @@
 			return utils.extensionMimeTypeMap[extension] || '*';
 		},
 
+		isPromise: function (object) {
+			// https://stackoverflow.com/questions/27746304/how-do-i-tell-if-an-object-is-a-promise#comment97339131_27746324
+			return object && typeof object.then === 'function';
+		},
+
+		promiseParallel: function (obj) {
+			var keys = Object.keys(obj);
+			return Promise.all(
+				keys.map(function (k) { return obj[k]; })
+			).then(function (results) {
+				var data = {};
+				keys.forEach(function (k, i) {
+					data[k] = results[i];
+				});
+				return data;
+			});
+		},
+
+		// https://github.com/sindresorhus/is-absolute-url
+		isAbsoluteUrlRE: /^[a-zA-Z][a-zA-Z\d+\-.]*:/,
+		isWinPathRE: /^[a-zA-Z]:\\/,
+		isAbsoluteUrl: function (url) {
+			if (utils.isWinPathRE.test(url)) {
+				return false;
+			}
+			return utils.isAbsoluteUrlRE.test(url);
+		},
+
 		isRelativeUrl: function (url) {
-			var firstChar = String(url || '').charAt(0);
-			return (firstChar === '.' || firstChar === '/');
+			return !utils.isAbsoluteUrl(url);
 		},
 
 		makeNumbersHumanReadable: function (elements) {
 			elements.each(function () {
-				$(this).html(utils.makeNumberHumanReadable($(this).attr('title')));
+				$(this)
+					.html(utils.makeNumberHumanReadable($(this).attr('title')))
+					.removeClass('hidden');
 			});
 		},
 
@@ -494,13 +490,15 @@
 
 		addCommasToNumbers: function (elements) {
 			elements.each(function (index, element) {
-				$(element).html(utils.addCommas($(element).html()));
+				$(element)
+					.html(utils.addCommas($(element).html()))
+					.removeClass('hidden');
 			});
 		},
 
 		// takes a string like 1000 and returns 1,000
 		addCommas: function (text) {
-			return text.replace(/(\d)(?=(\d\d\d)+(?!\d))/g, '$1,');
+			return String(text).replace(/(\d)(?=(\d\d\d)+(?!\d))/g, '$1,');
 		},
 
 		toISOString: function (timestamp) {
@@ -512,7 +510,7 @@
 			timestamp = Math.min(timestamp, 8640000000000000);
 
 			try {
-				return Date.prototype.toISOString ? new Date(parseInt(timestamp, 10)).toISOString() : timestamp;
+				return new Date(parseInt(timestamp, 10)).toISOString();
 			} catch (e) {
 				return timestamp;
 			}
@@ -601,7 +599,7 @@
 		},
 
 		getDaysArray: function (from, amount) {
-			var currentDay = new Date(from || Date.now()).getTime();
+			var currentDay = new Date(parseInt(from, 10) || Date.now()).getTime();
 			var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 			var labels = [];
 			var tmpDate;
@@ -633,22 +631,29 @@
 
 		// get all the url params in a single key/value hash
 		params: function (options) {
-			var a;
 			var hash = {};
-			var params;
 
 			options = options || {};
 			options.skipToType = options.skipToType || {};
 
-			if (options.url) {
-				a = utils.urlToLocation(options.url);
+			var searchStr = window.location.search;
+			if (options.hasOwnProperty('url')) {
+				if (options.url) {
+					var a = utils.urlToLocation(options.url);
+					searchStr = a ? a.search : '';
+				} else {
+					searchStr = '';
+				}
 			}
-			params = (a ? a.search : window.location.search).substring(1).split('&');
+			var params = searchStr.substring(1).split('&');
 
 			params.forEach(function (param) {
 				var val = param.split('=');
 				var key = decodeURI(val[0]);
-				var value = options.skipToType[key] ? decodeURI(val[1]) : utils.toType(decodeURI(val[1]));
+				var value = (
+					options.disableToType ||
+					options.skipToType[key] ? decodeURI(val[1]) : utils.toType(decodeURI(val[1]))
+				);
 
 				if (key) {
 					if (key.substr(-2, 2) === '[]') {
@@ -672,7 +677,9 @@
 		},
 
 		urlToLocation: function (url) {
-			return $('<a href="' + url + '" />')[0];
+			var a = document.createElement('a');
+			a.href = url;
+			return a;
 		},
 
 		// return boolean if string 'true' or string 'false', or if a parsable string which is a number
@@ -732,8 +739,11 @@
 		isInternalURI: function (targetLocation, referenceLocation, relative_path) {
 			return targetLocation.host === '' ||	// Relative paths are always internal links
 				(
-					targetLocation.host === referenceLocation.host && targetLocation.protocol === referenceLocation.protocol &&	// Otherwise need to check if protocol and host match
-					(relative_path.length > 0 ? targetLocation.pathname.indexOf(relative_path) === 0 : true)	// Subfolder installs need this additional check
+					targetLocation.host === referenceLocation.host &&
+					// Otherwise need to check if protocol and host match
+					targetLocation.protocol === referenceLocation.protocol &&
+					// Subfolder installs need this additional check
+					(relative_path.length > 0 ? targetLocation.pathname.indexOf(relative_path) === 0 : true)
 				);
 		},
 
@@ -762,28 +772,6 @@
 			};
 		},
 	};
-
-	/* eslint "no-extend-native": "off" */
-	if (typeof String.prototype.startsWith !== 'function') {
-		String.prototype.startsWith = function (prefix) {
-			if (this.length < prefix.length) {
-				return false;
-			}
-			return this.slice(0, prefix.length) === prefix;
-		};
-	}
-
-	if (typeof String.prototype.endsWith !== 'function') {
-		String.prototype.endsWith = function (suffix) {
-			if (this.length < suffix.length) {
-				return false;
-			}
-			if (suffix.length === 0) {
-				return true;
-			}
-			return this.slice(-suffix.length) === suffix;
-		};
-	}
 
 	return utils;
 }));

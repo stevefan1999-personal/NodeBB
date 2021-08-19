@@ -1,177 +1,180 @@
 'use strict';
 
-var async = require('async');
-var sm = require('sitemap');
-var nconf = require('nconf');
+const { SitemapStream, streamToPromise } = require('sitemap');
+const nconf = require('nconf');
 
-var db = require('./database');
-var categories = require('./categories');
-var topics = require('./topics');
-var privileges = require('./privileges');
-var meta = require('./meta');
-var plugins = require('./plugins');
-var utils = require('./utils');
+const db = require('./database');
+const categories = require('./categories');
+const topics = require('./topics');
+const privileges = require('./privileges');
+const meta = require('./meta');
+const plugins = require('./plugins');
+const utils = require('./utils');
 
-var sitemap = {
-	maps: {
-		topics: [],
-	},
+const sitemap = module.exports;
+sitemap.maps = {
+	topics: [],
 };
 
-sitemap.render = function (callback) {
-	var topicsPerPage = parseInt(meta.config.sitemapTopics, 10) || 500;
-	var returnData = {
+sitemap.render = async function () {
+	const topicsPerPage = meta.config.sitemapTopics;
+	const returnData = {
 		url: nconf.get('url'),
 		topics: [],
 	};
-
-	async.waterfall([
-		function (next) {
-			db.getObjectField('global', 'topicCount', next);
-		},
-		function (topicCount, next) {
-			var numPages = Math.ceil(Math.max(0, topicCount / topicsPerPage));
-			for (var x = 1; x <= numPages; x += 1) {
-				returnData.topics.push(x);
-			}
-
-			next(null, returnData);
-		},
-	], callback);
-};
-
-sitemap.getPages = function (callback) {
-	if (
-		sitemap.maps.pages &&
-		Date.now() < parseInt(sitemap.maps.pages.cacheSetTimestamp, 10) + parseInt(sitemap.maps.pages.cacheResetPeriod, 10)
-	) {
-		return sitemap.maps.pages.toXML(callback);
+	const [topicCount, categories, pages] = await Promise.all([
+		db.getObjectField('global', 'topicCount'),
+		getSitemapCategories(),
+		getSitemapPages(),
+	]);
+	returnData.categories = categories.length > 0;
+	returnData.pages = pages.length > 0;
+	const numPages = Math.ceil(Math.max(0, topicCount / topicsPerPage));
+	for (let x = 1; x <= numPages; x += 1) {
+		returnData.topics.push(x);
 	}
 
-	var urls = [{
+	return returnData;
+};
+
+async function getSitemapPages() {
+	const urls = [{
 		url: '',
 		changefreq: 'weekly',
 		priority: 0.6,
 	}, {
-		url: '/recent',
+		url: `${nconf.get('relative_path')}/recent`,
 		changefreq: 'daily',
 		priority: 0.4,
 	}, {
-		url: '/users',
+		url: `${nconf.get('relative_path')}/users`,
 		changefreq: 'daily',
 		priority: 0.4,
 	}, {
-		url: '/groups',
+		url: `${nconf.get('relative_path')}/groups`,
 		changefreq: 'daily',
 		priority: 0.4,
 	}];
 
-	plugins.fireHook('filter:sitemap.getPages', { urls: urls }, function (err, data) {
-		if (err) {
-			return callback(err);
-		}
-		sitemap.maps.pages = sm.createSitemap({
-			hostname: nconf.get('url'),
-			cacheTime: 1000 * 60 * 60 * 24,	// Cached for 24 hours
-			urls: data.urls,
-		});
+	const data = await plugins.hooks.fire('filter:sitemap.getPages', { urls: urls });
+	return data.urls;
+}
 
-		sitemap.maps.pages.toXML(callback);
-	});
-};
-
-sitemap.getCategories = function (callback) {
-	if (
-		sitemap.maps.categories &&
-		Date.now() < parseInt(sitemap.maps.categories.cacheSetTimestamp, 10) + parseInt(sitemap.maps.categories.cacheResetPeriod, 10)
-	) {
-		return sitemap.maps.categories.toXML(callback);
+sitemap.getPages = async function () {
+	if (sitemap.maps.pages && Date.now() < sitemap.maps.pagesCacheExpireTimestamp) {
+		return sitemap.maps.pages;
 	}
 
-	var categoryUrls = [];
-	categories.getCategoriesByPrivilege('categories:cid', 0, 'find', function (err, categoriesData) {
-		if (err) {
-			return callback(err);
-		}
+	const urls = await getSitemapPages();
+	if (!urls.length) {
+		sitemap.maps.pages = '';
+		sitemap.maps.pagesCacheExpireTimestamp = Date.now() + (1000 * 60 * 60 * 24);
+		return sitemap.maps.pages;
+	}
 
-		categoriesData.forEach(function (category) {
-			if (category) {
-				categoryUrls.push({
-					url: '/category/' + category.slug,
-					changefreq: 'weekly',
-					priority: 0.4,
-				});
-			}
-		});
-
-		sitemap.maps.categories = sm.createSitemap({
-			hostname: nconf.get('url'),
-			cacheTime: 1000 * 60 * 60 * 24,	// Cached for 24 hours
-			urls: categoryUrls,
-		});
-
-		sitemap.maps.categories.toXML(callback);
-	});
+	sitemap.maps.pages = await urlsToSitemap(urls);
+	sitemap.maps.pagesCacheExpireTimestamp = Date.now() + (1000 * 60 * 60 * 24);
+	return sitemap.maps.pages;
 };
 
-sitemap.getTopicPage = function (page, callback) {
+async function getSitemapCategories() {
+	const cids = await categories.getCidsByPrivilege('categories:cid', 0, 'find');
+	return await categories.getCategoriesFields(cids, ['slug']);
+}
+
+sitemap.getCategories = async function () {
+	if (sitemap.maps.categories && Date.now() < sitemap.maps.categoriesCacheExpireTimestamp) {
+		return sitemap.maps.categories;
+	}
+
+	const categoryUrls = [];
+	const categoriesData = await getSitemapCategories();
+	categoriesData.forEach((category) => {
+		if (category) {
+			categoryUrls.push({
+				url: `${nconf.get('relative_path')}/category/${category.slug}`,
+				changefreq: 'weekly',
+				priority: 0.4,
+			});
+		}
+	});
+
+	if (!categoryUrls.length) {
+		sitemap.maps.categories = '';
+		sitemap.maps.categoriesCacheExpireTimestamp = Date.now() + (1000 * 60 * 60 * 24);
+		return sitemap.maps.categories;
+	}
+
+	sitemap.maps.categories = await urlsToSitemap(categoryUrls);
+	sitemap.maps.categoriesCacheExpireTimestamp = Date.now() + (1000 * 60 * 60 * 24);
+	return sitemap.maps.categories;
+};
+
+sitemap.getTopicPage = async function (page) {
 	if (parseInt(page, 10) <= 0) {
-		return callback();
+		return;
 	}
 
-	var numTopics = parseInt(meta.config.sitemapTopics, 10) || 500;
-	var min = (parseInt(page, 10) - 1) * numTopics;
-	var max = min + numTopics;
+	const numTopics = meta.config.sitemapTopics;
+	const start = (parseInt(page, 10) - 1) * numTopics;
+	const stop = start + numTopics - 1;
 
-	if (
-		sitemap.maps.topics[page - 1] &&
-		Date.now() < parseInt(sitemap.maps.topics[page - 1].cacheSetTimestamp, 10) + parseInt(sitemap.maps.topics[page - 1].cacheResetPeriod, 10)
-	) {
-		return sitemap.maps.topics[page - 1].toXML(callback);
+	if (sitemap.maps.topics[page - 1] && Date.now() < sitemap.maps.topics[page - 1].cacheExpireTimestamp) {
+		return sitemap.maps.topics[page - 1].sm;
 	}
 
-	var topicUrls = [];
+	const topicUrls = [];
+	let tids = await db.getSortedSetRange('topics:tid', start, stop);
+	tids = await privileges.topics.filterTids('topics:read', tids, 0);
+	const topicData = await topics.getTopicsFields(tids, ['tid', 'title', 'slug', 'lastposttime']);
 
-	async.waterfall([
-		function (next) {
-			db.getSortedSetRevRange('topics:recent', min, max, next);
-		},
-		function (tids, next) {
-			privileges.topics.filterTids('read', tids, 0, next);
-		},
-		function (tids, next) {
-			topics.getTopicsFields(tids, ['tid', 'title', 'slug', 'lastposttime'], next);
-		},
-	], function (err, topics) {
-		if (err) {
-			return callback(err);
+	if (!topicData.length) {
+		sitemap.maps.topics[page - 1] = {
+			sm: '',
+			cacheExpireTimestamp: Date.now() + (1000 * 60 * 60 * 24),
+		};
+		return sitemap.maps.topics[page - 1].sm;
+	}
+
+	topicData.forEach((topic) => {
+		if (topic) {
+			topicUrls.push({
+				url: `${nconf.get('relative_path')}/topic/${topic.slug}`,
+				lastmodISO: utils.toISOString(topic.lastposttime),
+				changefreq: 'daily',
+				priority: 0.6,
+			});
 		}
-
-		topics.forEach(function (topic) {
-			if (topic) {
-				topicUrls.push({
-					url: '/topic/' + topic.slug,
-					lastmodISO: utils.toISOString(topic.lastposttime),
-					changefreq: 'daily',
-					priority: 0.6,
-				});
-			}
-		});
-
-		sitemap.maps.topics[page - 1] = sm.createSitemap({
-			hostname: nconf.get('url'),
-			cacheTime: 1000 * 60 * 60,	// Cached for 1 hour
-			urls: topicUrls,
-		});
-
-		sitemap.maps.topics[page - 1].toXML(callback);
 	});
+
+	sitemap.maps.topics[page - 1] = {
+		sm: await urlsToSitemap(topicUrls),
+		cacheExpireTimestamp: Date.now() + (1000 * 60 * 60 * 24),
+	};
+
+	return sitemap.maps.topics[page - 1].sm;
 };
+
+async function urlsToSitemap(urls) {
+	if (!urls.length) {
+		return '';
+	}
+	const smStream = new SitemapStream({ hostname: nconf.get('url') });
+	urls.forEach(url => smStream.write(url));
+	smStream.end();
+	return (await streamToPromise(smStream)).toString();
+}
 
 sitemap.clearCache = function () {
-	if (sitemap.obj) {
-		sitemap.obj.clearCache();
+	if (sitemap.maps.pages) {
+		sitemap.maps.pagesCacheExpireTimestamp = 0;
 	}
+	if (sitemap.maps.categories) {
+		sitemap.maps.categoriesCacheExpireTimestamp = 0;
+	}
+	sitemap.maps.topics.forEach((topicMap) => {
+		topicMap.cacheExpireTimestamp = 0;
+	});
 };
 
-module.exports = sitemap;
+require('./promisify')(sitemap);

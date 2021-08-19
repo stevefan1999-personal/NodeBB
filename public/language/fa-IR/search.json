@@ -11,12 +11,13 @@
     "posted-by": "ارسال شده توسط",
     "in-categories": "در دسته بندی ها",
     "search-child-categories": "جستجوی زیر دسته ها",
-    "has-tags": "دارای تگ های",
+    "has-tags": "دارای برچسب های",
     "reply-count": "تعداد پاسخ",
     "at-least": "حداقل",
     "at-most": "حداکثر",
     "relevance": "ارتباط",
     "post-time": "زمان ارسال",
+    "votes": "Votes",
     "newer-than": "جدیدتر از",
     "older-than": "قدیمی تر از",
     "any-date": "هر زمانی",
@@ -30,6 +31,7 @@
     "sort-by": "مرتب‌سازی بر اساس",
     "last-reply-time": "زمان آخرین پاسخ",
     "topic-title": "عنوان موضوع",
+    "topic-votes": "Topic votes",
     "number-of-replies": "تعداد پاسخ‌ها",
     "number-of-views": "تعداد مشاهده ها",
     "topic-start-date": "زمان شروع موضوع",
@@ -41,5 +43,7 @@
     "clear-preferences": "پاک کردن تنظیمات",
     "search-preferences-saved": "تنظیمات جستحو ذخیره شد",
     "search-preferences-cleared": "تنظیمات جستجو پاک شد",
-    "show-results-as": "نمایش نتایج به عنوان"
+    "show-results-as": "نمایش نتایج به عنوان",
+    "see-more-results": "See more results (%1)",
+    "search-in-category": "Search in \"%1\""
 }

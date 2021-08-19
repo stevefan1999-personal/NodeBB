@@ -1,7 +1,7 @@
 'use strict';
 
 
-define('forum/chats/search', ['components'], function (components) {
+define('forum/chats/search', ['components', 'api'], function (components, api) {
 	var search = {};
 
 	search.init = function () {
@@ -19,25 +19,20 @@ define('forum/chats/search', ['components'], function (components) {
 
 	function doSearch() {
 		var username = components.get('chat/search').val();
-		var chatsListEl = $('[component="chat/search/list"]');
-
 		if (!username) {
-			return chatsListEl.empty();
+			return $('[component="chat/search/list"]').empty();
 		}
 
-		socket.emit('user.search', {
+		api.get('/api/users', {
 			query: username,
 			searchBy: 'username',
-		}, function (err, data) {
-			if (err) {
-				return app.alertError(err.message);
-			}
-
-			displayResults(chatsListEl, data);
-		});
+			paginate: false,
+		}).then(displayResults)
+			.catch(app.alertError);
 	}
 
-	function displayResults(chatsListEl, data) {
+	function displayResults(data) {
+		var chatsListEl = $('[component="chat/search/list"]');
 		chatsListEl.empty();
 
 		data.users = data.users.filter(function (user) {
@@ -64,7 +59,7 @@ define('forum/chats/search', ['components'], function (components) {
 				'<i class="fa fa-circle status ' + userObj.status + '"></i> ' + userObj.username;
 		}
 
-		var chatEl = $('<li component="chat/search/user" />')
+		var chatEl = $('<li component="chat/search/user"></li>')
 			.attr('data-uid', userObj.uid)
 			.appendTo(chatsListEl);
 

@@ -1,97 +1,52 @@
 'use strict';
 
-var async = require('async');
+const sockets = require('.');
+const api = require('../api');
 
-var user = require('../user');
-var flags = require('../flags');
+const SocketFlags = module.exports;
 
-var SocketFlags = module.exports;
-
-SocketFlags.create = function (socket, data, callback) {
-	if (!socket.uid) {
-		return callback(new Error('[[error:not-logged-in]]'));
+SocketFlags.create = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'POST /api/v3/flags');
+	const response = await api.flags.create(socket, data);
+	if (response) {
+		return response.flagId;
 	}
-
-	if (!data || !data.type || !data.id || !data.reason) {
-		return callback(new Error('[[error:invalid-data]]'));
-	}
-
-	async.waterfall([
-		async.apply(flags.validate, {
-			uid: socket.uid,
-			type: data.type,
-			id: data.id,
-		}),
-		function (next) {
-			// If we got here, then no errors occurred
-			flags.create(data.type, data.id, socket.uid, data.reason, next);
-		},
-		function (flagObj, next) {
-			flags.notify(flagObj, socket.uid);
-			next(null, flagObj);
-		},
-	], callback);
 };
 
-SocketFlags.update = function (socket, data, callback) {
-	if (!data || !(data.flagId && data.data)) {
-		return callback(new Error('[[error:invalid-data]]'));
+SocketFlags.update = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'PUT /api/v3/flags/:flagId');
+	if (!data || !(data.flagId && data.data)) {	// check only req'd in socket.io
+		throw new Error('[[error:invalid-data]]');
 	}
 
-	var payload = {};
+	// Old socket method took input directly from .serializeArray(), v3 expects fully-formed obj.
+	let payload = {
+		flagId: data.flagId,
+	};
+	payload = data.data.reduce((memo, cur) => {
+		memo[cur.name] = cur.value;
+		return memo;
+	}, payload);
 
-	async.waterfall([
-		function (next) {
-			async.parallel([
-				async.apply(user.isAdminOrGlobalMod, socket.uid),
-				async.apply(user.isModeratorOfAnyCategory, socket.uid),
-			], function (err, results) {
-				next(err, results[0] || results[1]);
-			});
-		},
-		function (allowed, next) {
-			if (!allowed) {
-				return next(new Error('[[no-privileges]]'));
-			}
-
-			// Translate form data into object
-			payload = data.data.reduce(function (memo, cur) {
-				memo[cur.name] = cur.value;
-				return memo;
-			}, payload);
-
-			flags.update(data.flagId, socket.uid, payload, next);
-		},
-		async.apply(flags.getHistory, data.flagId),
-	], callback);
+	return await api.flags.update(socket, payload);
 };
 
-SocketFlags.appendNote = function (socket, data, callback) {
+SocketFlags.appendNote = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'POST /api/v3/flags/:flagId/notes');
 	if (!data || !(data.flagId && data.note)) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
 
-	async.waterfall([
-		function (next) {
-			async.parallel([
-				async.apply(user.isAdminOrGlobalMod, socket.uid),
-				async.apply(user.isModeratorOfAnyCategory, socket.uid),
-			], function (err, results) {
-				next(err, results[0] || results[1]);
-			});
-		},
-		function (allowed, next) {
-			if (!allowed) {
-				return next(new Error('[[no-privileges]]'));
-			}
-
-			flags.appendNote(data.flagId, socket.uid, data.note, next);
-		},
-		function (next) {
-			async.parallel({
-				notes: async.apply(flags.getNotes, data.flagId),
-				history: async.apply(flags.getHistory, data.flagId),
-			}, next);
-		},
-	], callback);
+	return await api.flags.appendNote(socket, data);
 };
+
+SocketFlags.deleteNote = async function (socket, data) {
+	sockets.warnDeprecated(socket, 'DELETE /api/v3/flags/:flagId/notes/:datetime');
+	if (!data || !(data.flagId && data.datetime)) {
+		throw new Error('[[error:invalid-data]]');
+	}
+
+	return await api.flags.deleteNote(socket, data);
+};
+
+require('../promisify')(SocketFlags);

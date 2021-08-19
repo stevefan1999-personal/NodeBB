@@ -1,128 +1,143 @@
 'use strict';
 
-var os = require('os');
-var async = require('async');
-var nconf = require('nconf');
-var winston = require('winston');
-var url = require('url');
-var cookieParser = require('cookie-parser')(nconf.get('secret'));
+const os = require('os');
+const nconf = require('nconf');
+const winston = require('winston');
+const util = require('util');
+const validator = require('validator');
+const cookieParser = require('cookie-parser')(nconf.get('secret'));
 
-var db = require('../database');
-var user = require('../user');
-var logger = require('../logger');
-var ratelimit = require('../middleware/ratelimit');
+const db = require('../database');
+const user = require('../user');
+const logger = require('../logger');
+const plugins = require('../plugins');
+const ratelimit = require('../middleware/ratelimit');
 
+const Namespaces = {};
 
-var Namespaces = {};
-var io;
+const Sockets = module.exports;
 
-var Sockets = module.exports;
-
-Sockets.init = function (server) {
+Sockets.init = async function (server) {
 	requireModules();
 
-	var SocketIO = require('socket.io');
-	var socketioWildcard = require('socketio-wildcard')();
-	io = new SocketIO({
-		path: nconf.get('relative_path') + '/socket.io',
+	const SocketIO = require('socket.io').Server;
+	const io = new SocketIO({
+		path: `${nconf.get('relative_path')}/socket.io`,
 	});
 
-	if (nconf.get('singleHostCluster')) {
-		io.adapter(require('socket.io-adapter-cluster')({
-			client: require('./single-host-cluster'),
-		}));
-	} else if (nconf.get('redis')) {
-		io.adapter(require('../database/redis').socketAdapter());
-	} else {
-		io.adapter(db.socketAdapter());
+	if (nconf.get('isCluster')) {
+		// socket.io-adapter-cluster needs update
+		// if (nconf.get('singleHostCluster')) {
+		// 	io.adapter(require('./single-host-cluster'));
+		// } else if (nconf.get('redis')) {
+		if (nconf.get('redis')) {
+			const adapter = await require('../database/redis').socketAdapter();
+			io.adapter(adapter);
+		} else {
+			winston.warn('clustering detected, you should setup redis!');
+		}
 	}
 
-	io.use(socketioWildcard);
 	io.use(authorize);
 
 	io.on('connection', onConnection);
 
+	const opts = {
+		transports: nconf.get('socket.io:transports') || ['polling', 'websocket'],
+		cookie: false,
+	};
 	/*
 	 * Restrict socket.io listener to cookie domain. If none is set, infer based on url.
 	 * Production only so you don't get accidentally locked out.
 	 * Can be overridden via config (socket.io:origins)
 	 */
 	if (process.env.NODE_ENV !== 'development') {
-		var domain = nconf.get('cookieDomain');
-		var parsedUrl = url.parse(nconf.get('url'));
-		var override = nconf.get('socket.io:origins');
-		if (!domain) {
-			domain = parsedUrl.hostname;	// cookies don't provide isolation by port: http://stackoverflow.com/a/16328399/122353
-		}
-
-		if (!override) {
-			io.origins(parsedUrl.protocol + '//' + domain + ':*');
-			winston.info('[socket.io] Restricting access to origin: ' + parsedUrl.protocol + '//' + domain + ':*');
-		} else {
-			io.origins(override);
-			winston.info('[socket.io] Restricting access to origin: ' + override);
-		}
+		const origins = nconf.get('socket.io:origins');
+		opts.cors = {
+			origin: origins,
+			methods: ['GET', 'POST'],
+			allowedHeaders: ['content-type'],
+		};
+		winston.info(`[socket.io] Restricting access to origin: ${origins}`);
 	}
 
-	io.listen(server, {
-		transports: nconf.get('socket.io:transports'),
-	});
-
+	io.listen(server, opts);
 	Sockets.server = io;
 };
 
 function onConnection(socket) {
 	socket.ip = (socket.request.headers['x-forwarded-for'] || socket.request.connection.remoteAddress || '').split(',')[0];
-
+	socket.request.ip = socket.ip;
 	logger.io_one(socket, socket.uid);
 
 	onConnect(socket);
-
-	socket.on('*', function (payload) {
+	socket.onAny((event, ...args) => {
+		const payload = { data: [event].concat(args) };
 		onMessage(socket, payload);
+	});
+
+	socket.on('disconnect', () => {
+		onDisconnect(socket);
 	});
 }
 
-function onConnect(socket) {
+function onDisconnect(socket) {
+	require('./uploads').clear(socket.id);
+	plugins.hooks.fire('action:sockets.disconnect', { socket: socket });
+}
+
+async function onConnect(socket) {
+	try {
+		await validateSession(socket, '[[error:invalid-session]]');
+	} catch (e) {
+		if (e.message === '[[error:invalid-session]]') {
+			socket.emit('event:invalid_session');
+			return;
+		}
+		throw e;
+	}
+
 	if (socket.uid) {
-		socket.join('uid_' + socket.uid);
+		socket.join(`uid_${socket.uid}`);
 		socket.join('online_users');
 	} else {
 		socket.join('online_guests');
 	}
 
-	socket.join('sess_' + socket.request.signedCookies[nconf.get('sessionKey')]);
-	io.sockets.sockets[socket.id].emit('checkSession', socket.uid);
-	io.sockets.sockets[socket.id].emit('setHostname', os.hostname());
+	socket.join(`sess_${socket.request.signedCookies[nconf.get('sessionKey')]}`);
+	socket.emit('checkSession', socket.uid);
+	socket.emit('setHostname', os.hostname());
+	plugins.hooks.fire('action:sockets.connect', { socket: socket });
 }
 
-function onMessage(socket, payload) {
+async function onMessage(socket, payload) {
 	if (!payload.data.length) {
 		return winston.warn('[socket.io] Empty payload');
 	}
 
-	var eventName = payload.data[0];
-	var params = payload.data[1];
-	var callback = typeof payload.data[payload.data.length - 1] === 'function' ? payload.data[payload.data.length - 1] : function () {};
+	const eventName = payload.data[0];
+	const params = typeof payload.data[1] === 'function' ? {} : payload.data[1];
+	const callback = typeof payload.data[payload.data.length - 1] === 'function' ? payload.data[payload.data.length - 1] : function () {};
 
 	if (!eventName) {
 		return winston.warn('[socket.io] Empty method name');
 	}
 
-	var parts = eventName.toString().split('.');
-	var namespace = parts[0];
-	var methodToCall = parts.reduce(function (prev, cur) {
+	const parts = eventName.toString().split('.');
+	const namespace = parts[0];
+	const methodToCall = parts.reduce((prev, cur) => {
 		if (prev !== null && prev[cur]) {
 			return prev[cur];
 		}
 		return null;
 	}, Namespaces);
 
-	if (!methodToCall) {
+	if (!methodToCall || typeof methodToCall !== 'function') {
 		if (process.env.NODE_ENV === 'development') {
-			winston.warn('[socket.io] Unrecognized message: ' + eventName);
+			winston.warn(`[socket.io] Unrecognized message: ${eventName}`);
 		}
-		return callback({ message: '[[error:invalid-event]]' });
+		const escapedName = validator.escape(String(eventName));
+		return callback({ message: `[[error:invalid-event, ${escapedName}]]` });
 	}
 
 	socket.previousEvents = socket.previousEvents || [];
@@ -132,133 +147,120 @@ function onMessage(socket, payload) {
 	}
 
 	if (!eventName.startsWith('admin.') && ratelimit.isFlooding(socket)) {
-		winston.warn('[socket.io] Too many emits! Disconnecting uid : ' + socket.uid + '. Events : ' + socket.previousEvents);
+		winston.warn(`[socket.io] Too many emits! Disconnecting uid : ${socket.uid}. Events : ${socket.previousEvents}`);
 		return socket.disconnect();
 	}
 
-	async.waterfall([
-		function (next) {
-			checkMaintenance(socket, next);
-		},
-		function (next) {
-			validateSession(socket, next);
-		},
-		function (next) {
-			if (Namespaces[namespace].before) {
-				Namespaces[namespace].before(socket, eventName, params, next);
-			} else {
-				next();
-			}
-		},
-		function (next) {
-			methodToCall(socket, params, next);
-		},
-	], function (err, result) {
-		callback(err ? { message: err.message } : null, result);
-	});
+	try {
+		await checkMaintenance(socket);
+		await validateSession(socket, '[[error:revalidate-failure]]');
+
+		if (Namespaces[namespace].before) {
+			await Namespaces[namespace].before(socket, eventName, params);
+		}
+
+		if (methodToCall.constructor && methodToCall.constructor.name === 'AsyncFunction') {
+			const result = await methodToCall(socket, params);
+			callback(null, result);
+		} else {
+			methodToCall(socket, params, (err, result) => {
+				callback(err ? { message: err.message } : null, result);
+			});
+		}
+	} catch (err) {
+		winston.error(`${eventName}\n${err.stack ? err.stack : err.message}`);
+		callback({ message: err.message });
+	}
 }
 
 function requireModules() {
-	var modules = ['admin', 'categories', 'groups', 'meta', 'modules',
-		'notifications', 'plugins', 'posts', 'topics', 'user', 'blacklist', 'flags',
+	const modules = ['admin', 'categories', 'groups', 'meta', 'modules',
+		'notifications', 'plugins', 'posts', 'topics', 'user', 'blacklist',
+		'flags', 'uploads',
 	];
 
-	modules.forEach(function (module) {
-		Namespaces[module] = require('./' + module);
+	modules.forEach((module) => {
+		Namespaces[module] = require(`./${module}`);
 	});
 }
 
-function checkMaintenance(socket, callback) {
-	var meta = require('../meta');
-	if (parseInt(meta.config.maintenanceMode, 10) !== 1) {
-		return setImmediate(callback);
+async function checkMaintenance(socket) {
+	const meta = require('../meta');
+	if (!meta.config.maintenanceMode) {
+		return;
 	}
-	user.isAdministrator(socket.uid, function (err, isAdmin) {
-		if (err || isAdmin) {
-			return callback(err);
-		}
-	});
+	const isAdmin = await user.isAdministrator(socket.uid);
+	if (isAdmin) {
+		return;
+	}
+	const validator = require('validator');
+	throw new Error(`[[pages:maintenance.text, ${validator.escape(String(meta.config.title || 'NodeBB'))}]]`);
 }
 
-function validateSession(socket, callback) {
-	var req = socket.request;
+const getSessionAsync = util.promisify(
+	(sid, callback) => db.sessionStore.get(sid, (err, sessionObj) => callback(err, sessionObj || null))
+);
+
+async function validateSession(socket, errorMsg) {
+	const req = socket.request;
 	if (!req.signedCookies || !req.signedCookies[nconf.get('sessionKey')]) {
-		return callback();
+		return;
 	}
-	db.sessionStore.get(req.signedCookies[nconf.get('sessionKey')], function (err, sessionData) {
-		if (err || !sessionData) {
-			return callback(err || new Error('[[error:invalid-session]]'));
-		}
-
-		callback();
+	const sessionData = await getSessionAsync(req.signedCookies[nconf.get('sessionKey')]);
+	if (!sessionData) {
+		throw new Error(errorMsg);
+	}
+	const result = await plugins.hooks.fire('static:sockets.validateSession', {
+		req: req,
+		socket: socket,
+		session: sessionData,
 	});
+	return result;
 }
 
-function authorize(socket, callback) {
-	var request = socket.request;
+const cookieParserAsync = util.promisify((req, callback) => cookieParser(req, {}, err => callback(err)));
+
+async function authorize(socket, callback) {
+	const { request } = socket;
 
 	if (!request) {
 		return callback(new Error('[[error:not-authorized]]'));
 	}
 
-	async.waterfall([
-		function (next) {
-			cookieParser(request, {}, next);
-		},
-		function (next) {
-			db.sessionStore.get(request.signedCookies[nconf.get('sessionKey')], function (err, sessionData) {
-				if (err) {
-					return next(err);
-				}
-				if (sessionData && sessionData.passport && sessionData.passport.user) {
-					request.session = sessionData;
-					socket.uid = parseInt(sessionData.passport.user, 10);
-				} else {
-					socket.uid = 0;
-				}
-				next();
-			});
-		},
-	], callback);
+	await cookieParserAsync(request);
+	const sessionData = await getSessionAsync(request.signedCookies[nconf.get('sessionKey')]);
+	if (sessionData && sessionData.passport && sessionData.passport.user) {
+		request.session = sessionData;
+		socket.uid = parseInt(sessionData.passport.user, 10);
+	} else {
+		socket.uid = 0;
+	}
+	request.uid = socket.uid;
+	callback();
 }
 
 Sockets.in = function (room) {
-	return io.in(room);
+	return Sockets.server && Sockets.server.in(room);
 };
 
 Sockets.getUserSocketCount = function (uid) {
-	if (!io) {
+	return Sockets.getCountInRoom(`uid_${uid}`);
+};
+
+Sockets.getCountInRoom = function (room) {
+	if (!Sockets.server) {
 		return 0;
 	}
-
-	var room = io.sockets.adapter.rooms['uid_' + uid];
-	return room ? room.length : 0;
+	const roomMap = Sockets.server.sockets.adapter.rooms.get(room);
+	return roomMap ? roomMap.size : 0;
 };
 
-
-Sockets.reqFromSocket = function (socket, payload, event) {
-	var headers = socket.request ? socket.request.headers : {};
-	var encrypted = socket.request ? !!socket.request.connection.encrypted : false;
-	var host = headers.host;
-	var referer = headers.referer || '';
-	var data = ((payload || {}).data || []);
-
-	if (!host) {
-		host = url.parse(referer).host || '';
+Sockets.warnDeprecated = (socket, replacement) => {
+	if (socket.previousEvents) {
+		socket.emit('event:deprecated_call', {
+			eventName: socket.previousEvents[socket.previousEvents.length - 1],
+			replacement: replacement,
+		});
 	}
-
-	return {
-		uid: socket.uid,
-		params: data[1],
-		method: event || data[0],
-		body: payload,
-		ip: socket.ip,
-		host: host,
-		protocol: encrypted ? 'https' : 'http',
-		secure: encrypted,
-		url: referer,
-		path: referer.substr(referer.indexOf(host) + host.length),
-		headers: headers,
-	};
+	winston.warn(`[deprecated]\n ${new Error('-').stack.split('\n').slice(2, 5).join('\n')}\n     use ${replacement}`);
 };
-

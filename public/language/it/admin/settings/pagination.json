@@ -1,11 +1,12 @@
 {
-	"pagination": "Pagination Settings",
-	"enable": "Paginate topics and posts instead of using infinite scroll.",
-	"topics": "Topic Pagination",
-	"posts-per-page": "Posts per Page",
-	"max-posts-per-page": "Maximum posts per page",
-	"categories": "Category Pagination",
-	"topics-per-page": "Topics per Page",
-	"max-topics-per-page": "Maximum topics per page",
-	"initial-num-load": "Initial Number of Topics to Load on Unread, Recent, and Popular"
+	"pagination": "Impostazioni di impaginazione",
+	"enable": "Impaginare discussioni e post al posto di usare lo scorrimento infinito",
+	"posts": "Impaginazione dei post",
+	"topics": "Impaginazione Discussione",
+	"posts-per-page": "Post per pagina",
+	"max-posts-per-page": "Numero massimo di post per pagina",
+	"categories": "Categoria Impaginazione",
+	"topics-per-page": "Discussioni per pagina",
+	"max-topics-per-page": "Numero massimo di discussioni per pagina",
+	"categories-per-page": "Categorie per pagina"
 }

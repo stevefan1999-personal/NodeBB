@@ -1,3 +1,4 @@
+dist/
 yarn.lock
 npm-debug.log
 node_modules/
@@ -27,7 +28,6 @@ pidfile
 # templates
 /public/templates
 
-/public/sounds
 /public/uploads
 /test/uploads
 
@@ -40,6 +40,7 @@ pidfile
 /public/acp.min.js.map
 /public/installer.css
 /public/installer.min.js
+/public/bootstrap.min.css
 /public/logo.png
 
 # Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio
@@ -66,3 +67,5 @@ test/files/normalise.jpg.png
 test/files/normalise-resized.jpg
 package-lock.json
 /package.json
+*.mongodb
+link-plugins.sh

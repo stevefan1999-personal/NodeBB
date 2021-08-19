@@ -1,58 +1,44 @@
 'use strict';
 
-var async = require('async');
-var path = require('path');
-var nconf = require('nconf');
-var winston = require('winston');
+const path = require('path');
+const nconf = require('nconf');
+const winston = require('winston');
 
-var db = require('../database');
-var file = require('../file');
-var batch = require('../batch');
+const db = require('../database');
+const file = require('../file');
+const batch = require('../batch');
 
 module.exports = function (User) {
-	User.deleteUpload = function (callerUid, uid, uploadName, callback) {
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					isUsersUpload: function (next) {
-						db.isSortedSetMember('uid:' + callerUid + ':uploads', uploadName, next);
-					},
-					isAdminOrGlobalMod: function (next) {
-						User.isAdminOrGlobalMod(callerUid, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				if (!results.isAdminOrGlobalMod && !results.isUsersUpload) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
+	User.deleteUpload = async function (callerUid, uid, uploadName) {
+		const [isUsersUpload, isAdminOrGlobalMod] = await Promise.all([
+			db.isSortedSetMember(`uid:${callerUid}:uploads`, uploadName),
+			User.isAdminOrGlobalMod(callerUid),
+		]);
+		if (!isAdminOrGlobalMod && !isUsersUpload) {
+			throw new Error('[[error:no-privileges]]');
+		}
 
-				winston.verbose('[user/deleteUpload] Deleting ' + uploadName);
-				async.parallel([
-					async.apply(file.delete, path.join(nconf.get('upload_path'), uploadName)),
-					async.apply(file.delete, path.join(nconf.get('upload_path'), path.dirname(uploadName), path.basename(uploadName, path.extname(uploadName)) + '-resized' + path.extname(uploadName))),
-				], function (err) {
-					// Only return err, not the parallel'd result set
-					next(err);
-				});
-			},
-			function (next) {
-				db.sortedSetRemove('uid:' + uid + ':uploads', uploadName, next);
-			},
-		], callback);
+		const finalPath = path.join(nconf.get('upload_path'), uploadName);
+		if (!finalPath.startsWith(nconf.get('upload_path'))) {
+			throw new Error('[[error:invalid-path]]');
+		}
+		winston.verbose(`[user/deleteUpload] Deleting ${uploadName}`);
+		await Promise.all([
+			file.delete(finalPath),
+			file.delete(file.appendToFileName(finalPath, '-resized')),
+		]);
+		await db.sortedSetRemove(`uid:${uid}:uploads`, uploadName);
 	};
 
-	User.collateUploads = function (uid, archive, callback) {
-		batch.processSortedSet('uid:' + uid + ':uploads', function (files, next) {
-			files.forEach(function (file) {
+	User.collateUploads = async function (uid, archive) {
+		await batch.processSortedSet(`uid:${uid}:uploads`, (files, next) => {
+			files.forEach((file) => {
 				archive.file(path.join(nconf.get('upload_path'), file), {
 					name: path.basename(file),
 				});
 			});
 
 			setImmediate(next);
-		}, function (err) {
-			callback(err);
-		});
+		}, { batch: 100 });
 	};
 };

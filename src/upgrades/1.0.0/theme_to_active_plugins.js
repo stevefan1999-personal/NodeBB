@@ -1,8 +1,8 @@
 'use strict';
 
-var db = require('../../database');
+const async = require('async');
+const db = require('../../database');
 
-var async = require('async');
 
 module.exports = {
 	name: 'Adding theme to active plugins sorted set',

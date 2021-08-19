@@ -11,12 +11,50 @@
 				</p>
 				<input type="text" class="form-control input-lg" id="email:from" data-field="email:from" placeholder="info@example.org" /><br />
 			</div>
+
 			<div class="form-group">
 				<label for="email:from_name"><strong>From Name</strong></label>
 				<p class="help-block">
 					[[admin/settings/email:from-help]]
 				</p>
 				<input type="text" class="form-control input-lg" id="email:from_name" data-field="email:from_name" placeholder="NodeBB" /><br />
+			</div>
+
+			<div class="checkbox">
+				<label for="removeEmailNotificationImages" class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" id="removeEmailNotificationImages" data-field="removeEmailNotificationImages" name="removeEmailNotificationImages" />
+					<span class="mdl-switch__label">[[admin/settings/email:notifications.remove-images]]</span>
+				</label>
+			</div>
+
+			<div class="checkbox">
+				<label for="includeUnverifiedEmails" class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" id="includeUnverifiedEmails" data-field="includeUnverifiedEmails" name="includeUnverifiedEmails" />
+					<span class="mdl-switch__label">[[admin/settings/email:include-unverified-emails]]</span>
+				</label>
+			</div>
+			<p class="help-block">[[admin/settings/email:include-unverified-warning]]</p>
+		</form>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/email:subscriptions]]</div>
+	<div class="col-sm-10 col-xs-12">
+		<form>
+			<div class="checkbox">
+				<label for="disableEmailSubscriptions" class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" id="disableEmailSubscriptions" data-field="disableEmailSubscriptions" name="disableEmailSubscriptions" />
+					<span class="mdl-switch__label">[[admin/settings/email:subscriptions.disable]]</span>
+				</label>
+			</div>
+
+			<div class="form-group">
+				<label for="digestHour"><strong>[[admin/settings/email:subscriptions.hour]]</strong></label>
+				<input type="number" class="form-control input-lg" id="digestHour" data-field="digestHour" placeholder="17" min="0" max="24" />
+				<p class="help-block">
+					[[admin/settings/email:subscriptions.hour-help]]
+				</p>
 			</div>
 		</form>
 	</div>
@@ -38,14 +76,25 @@
 				</label>
 			</div>
 			<div class="form-group">
+				<div class="checkbox">
+					<label for="email:smtpTransport:pool" class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+						<input class="mdl-switch__input" type="checkbox" id="email:smtpTransport:pool" data-field="email:smtpTransport:pool" name="email:smtpTransport:pool" />
+						<span class="mdl-switch__label">[[admin/settings/email:smtp-transport.pool]]</span>
+					</label>
+				</div>
+				<p class="col-xs-12 help-block">
+					[[admin/settings/email:smtp-transport.pool-help]]
+				</p>
+			</div>
+			<div class="form-group">
 				<label for="email:smtpTransport:service"><strong>[[admin/settings/email:smtp-transport.service]]</strong></label>
 				<select class="form-control input-lg" id="email:smtpTransport:service" data-field="email:smtpTransport:service">
 					<option value="nodebb-custom-smtp" style="font-weight: bold">[[admin/settings/email:smtp-transport.service-custom]]</option>
 					<option style="font-size: 10px" disabled>&nbsp;</option>
 
-					<!-- BEGIN services -->
-					<option value="@value">@value</option>
-					<!-- END services -->
+					{{{ each services }}}
+					<option value="{@value}">{@value}</option>
+					{{{ end }}}
 				</select>
 				<p class="help-block">
 					[[admin/settings/email:smtp-transport.service-help]]
@@ -110,7 +159,7 @@
 			<label>[[admin/settings/email:testing.select]]</label>
 			<select id="test-email" class="form-control">
 				<!-- BEGIN sendable -->
-				<option value="{sendable.path}">{sendable.path}</option>
+				<option value="{@value}">{@value}</option>
 				<!-- END sendable -->
 			</select>
 		</div>
@@ -118,28 +167,6 @@
 		<p class="help-block">
 			[[admin/settings/email:testing.send-help]]
 		</p>
-	</div>
-</div>
-
-<div class="row">
-	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/email:subscriptions]]</div>
-	<div class="col-sm-10 col-xs-12">
-		<form>
-			<div class="checkbox">
-				<label for="disableEmailSubscriptions" class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input class="mdl-switch__input" type="checkbox" id="disableEmailSubscriptions" data-field="disableEmailSubscriptions" name="disableEmailSubscriptions" />
-					<span class="mdl-switch__label">[[admin/settings/email:subscriptions.disable]]</span>
-				</label>
-			</div>
-
-			<div class="form-group">
-				<label for="digestHour"><strong>[[admin/settings/email:subscriptions.hour]]</strong></label>
-				<input type="number" class="form-control input-lg" id="digestHour" data-field="digestHour" placeholder="17" min="0" max="24" />
-				<p class="help-block">
-					[[admin/settings/email:subscriptions.hour-help]]
-				</p>
-			</div>
-		</form>
 	</div>
 </div>
 

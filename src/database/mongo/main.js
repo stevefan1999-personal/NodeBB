@@ -1,156 +1,150 @@
 'use strict';
 
-module.exports = function (db, module) {
-	var helpers = module.helpers.mongo;
-
-	module.flushdb = function (callback) {
-		callback = callback || helpers.noop;
-		db.dropDatabase(function (err) {
-			callback(err);
-		});
+module.exports = function (module) {
+	const helpers = require('./helpers');
+	module.flushdb = async function () {
+		await module.client.dropDatabase();
 	};
 
-	module.emptydb = function (callback) {
-		callback = callback || helpers.noop;
-		db.collection('objects').remove({}, function (err) {
-			if (err) {
-				return callback(err);
-			}
-			module.resetObjectCache();
-			callback();
-		});
+	module.emptydb = async function () {
+		await module.client.collection('objects').deleteMany({});
+		module.objectCache.reset();
 	};
 
-	module.exists = function (key, callback) {
+	module.exists = async function (key) {
 		if (!key) {
-			return callback();
+			return;
 		}
-		db.collection('objects').findOne({ _key: key }, function (err, item) {
-			callback(err, item !== undefined && item !== null);
-		});
-	};
 
-	module.delete = function (key, callback) {
-		callback = callback || helpers.noop;
-		if (!key) {
-			return callback();
-		}
-		db.collection('objects').remove({ _key: key }, function (err) {
-			if (err) {
-				return callback(err);
-			}
-			module.delObjectCache(key);
-			callback();
-		});
-	};
+		if (Array.isArray(key)) {
+			const data = await module.client.collection('objects').find({
+				_key: { $in: key },
+			}, { _id: 0, _key: 1 }).toArray();
 
-	module.deleteAll = function (keys, callback) {
-		callback = callback || helpers.noop;
-		if (!Array.isArray(keys) || !keys.length) {
-			return callback();
-		}
-		db.collection('objects').remove({ _key: { $in: keys } }, function (err) {
-			if (err) {
-				return callback(err);
-			}
-
-			keys.forEach(function (key) {
-				module.delObjectCache(key);
+			const map = {};
+			data.forEach((item) => {
+				map[item._key] = true;
 			});
 
-			callback(null);
-		});
-	};
-
-	module.get = function (key, callback) {
-		if (!key) {
-			return callback();
+			return key.map(key => !!map[key]);
 		}
-		module.getObject(key, function (err, objectData) {
-			if (err) {
-				return callback(err);
-			}
-			// fallback to old field name 'value' for backwards compatibility #6340
-			var value = null;
-			if (objectData) {
-				if (objectData.hasOwnProperty('data')) {
-					value = objectData.data;
-				} else if (objectData.hasOwnProperty('value')) {
-					value = objectData.value;
-				}
-			}
-			callback(null, value);
-		});
+
+		const item = await module.client.collection('objects').findOne({
+			_key: key,
+		}, { _id: 0, _key: 1 });
+		return item !== undefined && item !== null;
 	};
 
-	module.set = function (key, value, callback) {
-		callback = callback || helpers.noop;
+	module.scan = async function (params) {
+		const match = helpers.buildMatchQuery(params.match);
+		return await module.client.collection('objects').distinct(
+			'_key', { _key: { $regex: new RegExp(match) } }
+		);
+	};
+
+	module.delete = async function (key) {
 		if (!key) {
-			return callback();
+			return;
 		}
-		var data = { data: value };
-		module.setObject(key, data, callback);
+		await module.client.collection('objects').deleteMany({ _key: key });
+		module.objectCache.del(key);
 	};
 
-	module.increment = function (key, callback) {
-		callback = callback || helpers.noop;
+	module.deleteAll = async function (keys) {
+		if (!Array.isArray(keys) || !keys.length) {
+			return;
+		}
+		await module.client.collection('objects').deleteMany({ _key: { $in: keys } });
+		module.objectCache.del(keys);
+	};
+
+	module.get = async function (key) {
 		if (!key) {
-			return callback();
+			return;
 		}
-		db.collection('objects').findAndModify({ _key: key }, {}, { $inc: { data: 1 } }, { new: true, upsert: true }, function (err, result) {
-			callback(err, result && result.value ? result.value.data : null);
+
+		const objectData = await module.client.collection('objects').findOne({ _key: key }, { projection: { _id: 0 } });
+
+		// fallback to old field name 'value' for backwards compatibility #6340
+		let value = null;
+		if (objectData) {
+			if (objectData.hasOwnProperty('data')) {
+				value = objectData.data;
+			} else if (objectData.hasOwnProperty('value')) {
+				value = objectData.value;
+			}
+		}
+		return value;
+	};
+
+	module.set = async function (key, value) {
+		if (!key) {
+			return;
+		}
+		await module.setObject(key, { data: value });
+	};
+
+	module.increment = async function (key) {
+		if (!key) {
+			return;
+		}
+		const result = await module.client.collection('objects').findOneAndUpdate({
+			_key: key,
+		}, {
+			$inc: { data: 1 },
+		}, {
+			returnDocument: 'after',
+			upsert: true,
 		});
+		return result && result.value ? result.value.data : null;
 	};
 
-	module.rename = function (oldKey, newKey, callback) {
-		callback = callback || helpers.noop;
-		db.collection('objects').update({ _key: oldKey }, { $set: { _key: newKey } }, { multi: true }, function (err) {
-			if (err) {
-				return callback(err);
-			}
-			module.delObjectCache(oldKey);
-			module.delObjectCache(newKey);
-			callback();
-		});
+	module.rename = async function (oldKey, newKey) {
+		await module.client.collection('objects').updateMany({ _key: oldKey }, { $set: { _key: newKey } });
+		module.objectCache.del([oldKey, newKey]);
 	};
 
-	module.type = function (key, callback) {
-		db.collection('objects').findOne({ _key: key }, function (err, data) {
-			if (err) {
-				return callback(err);
-			}
-			if (!data) {
-				return callback(null, null);
-			}
-			delete data.expireAt;
-			var keys = Object.keys(data);
-			if (keys.length === 4 && data.hasOwnProperty('_key') && data.hasOwnProperty('score') && data.hasOwnProperty('value')) {
-				return callback(null, 'zset');
-			} else if (keys.length === 3 && data.hasOwnProperty('_key') && data.hasOwnProperty('members')) {
-				return callback(null, 'set');
-			} else if (keys.length === 3 && data.hasOwnProperty('_key') && data.hasOwnProperty('array')) {
-				return callback(null, 'list');
-			} else if (keys.length === 3 && data.hasOwnProperty('_key') && data.hasOwnProperty('data')) {
-				return callback(null, 'string');
-			}
-			callback(null, 'hash');
-		});
+	module.type = async function (key) {
+		const data = await module.client.collection('objects').findOne({ _key: key });
+		if (!data) {
+			return null;
+		}
+		delete data.expireAt;
+		const keys = Object.keys(data);
+		if (keys.length === 4 && data.hasOwnProperty('_key') && data.hasOwnProperty('score') && data.hasOwnProperty('value')) {
+			return 'zset';
+		} else if (keys.length === 3 && data.hasOwnProperty('_key') && data.hasOwnProperty('members')) {
+			return 'set';
+		} else if (keys.length === 3 && data.hasOwnProperty('_key') && data.hasOwnProperty('array')) {
+			return 'list';
+		} else if (keys.length === 3 && data.hasOwnProperty('_key') && data.hasOwnProperty('data')) {
+			return 'string';
+		}
+		return 'hash';
 	};
 
-	module.expire = function (key, seconds, callback) {
-		module.expireAt(key, Math.round(Date.now() / 1000) + seconds, callback);
+	module.expire = async function (key, seconds) {
+		await module.expireAt(key, Math.round(Date.now() / 1000) + seconds);
 	};
 
-	module.expireAt = function (key, timestamp, callback) {
-		module.setObjectField(key, 'expireAt', new Date(timestamp * 1000), callback);
+	module.expireAt = async function (key, timestamp) {
+		await module.setObjectField(key, 'expireAt', new Date(timestamp * 1000));
 	};
 
-	module.pexpire = function (key, ms, callback) {
-		module.pexpireAt(key, Date.now() + parseInt(ms, 10), callback);
+	module.pexpire = async function (key, ms) {
+		await module.pexpireAt(key, Date.now() + parseInt(ms, 10));
 	};
 
-	module.pexpireAt = function (key, timestamp, callback) {
+	module.pexpireAt = async function (key, timestamp) {
 		timestamp = Math.min(timestamp, 8640000000000000);
-		module.setObjectField(key, 'expireAt', new Date(timestamp), callback);
+		await module.setObjectField(key, 'expireAt', new Date(timestamp));
+	};
+
+	module.ttl = async function (key) {
+		return Math.round((await module.getObjectField(key, 'expireAt') - Date.now()) / 1000);
+	};
+
+	module.pttl = async function (key) {
+		return await module.getObjectField(key, 'expireAt') - Date.now();
 	};
 };

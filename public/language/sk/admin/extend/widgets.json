@@ -1,7 +1,7 @@
 {
 	"available": "Dostupné miniaplikácie",
 	"explanation": "Vyberte si miniaplikáciu z rozbalovacej ponuky a pretiahnite ju do oblasti šablóny miniaplikácie naľavo.",
-	"none-installed": "Neboli nájdené žiadne miniaplikácie. Aktivujte rozšírenie základných miniaplikácií v ovládacom paneli <a href=\"%1\"> Rozšírenia </a>.",
+	"none-installed": "No widgets found! Activate the widget essentials plugin in the <a href=\"%1\">plugins</a> control panel.",
 	"clone-from": "Okopírovať miniaplikácie z",
 	"containers.available": "Dostupné moduly",
 	"containers.explanation": "Presuňte na akúkoľvek aktívnu miniaplikáciu",
@@ -18,5 +18,13 @@
 	"alert.update-success": "Miniaplikácie boli úspešne aktualizované",
 	"alert.clone-success": "Úspešne naklonované miniaplikácie",
 
-	"error.select-clone": "Vyberte prosím stránku, z ktorej chcete klonovať"
+	"error.select-clone": "Vyberte prosím stránku, z ktorej chcete klonovať",
+
+	"title": "Title",
+	"title.placeholder": "Title (only shown on some containers)",
+	"container": "Container",
+	"container.placeholder": "Drag and drop a container or enter HTML here.",
+	"show-to-groups": "Show to groups",
+	"hide-from-groups": "Hide from groups",
+	"hide-on-mobile": "Hide on mobile"
 }

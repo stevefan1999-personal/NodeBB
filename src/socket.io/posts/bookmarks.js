@@ -1,14 +1,16 @@
 'use strict';
 
-
-var helpers = require('./helpers');
+const sockets = require('..');
+const api = require('../../api');
 
 module.exports = function (SocketPosts) {
-	SocketPosts.bookmark = function (socket, data, callback) {
-		helpers.postCommand(socket, 'bookmark', 'bookmarked', '', data, callback);
+	SocketPosts.bookmark = async function (socket, data) {
+		sockets.warnDeprecated(socket, 'PUT /api/v3/posts/:pid/bookmark');
+		return await api.posts.bookmark(socket, data);
 	};
 
-	SocketPosts.unbookmark = function (socket, data, callback) {
-		helpers.postCommand(socket, 'unbookmark', 'bookmarked', '', data, callback);
+	SocketPosts.unbookmark = async function (socket, data) {
+		sockets.warnDeprecated(socket, 'DELETE /api/v3/posts/:pid/bookmark');
+		return await api.posts.unbookmark(socket, data);
 	};
 };

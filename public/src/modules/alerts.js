@@ -1,7 +1,7 @@
 'use strict';
 
 
-define('alerts', ['translator', 'components', 'benchpress'], function (translator, components, Benchpress) {
+define('alerts', ['translator', 'components', 'hooks'], function (translator, components, hooks) {
 	var module = {};
 
 	module.alert = function (params) {
@@ -19,40 +19,40 @@ define('alerts', ['translator', 'components', 'benchpress'], function (translato
 	};
 
 	function createNew(params) {
-		Benchpress.parse('alert', params, function (alertTpl) {
-			translator.translate(alertTpl, function (translatedHTML) {
-				var alert = $('#' + params.alert_id);
-				if (alert.length) {
-					return updateAlert(alert, params);
-				}
-				alert = $(translatedHTML);
-				alert.fadeIn(200);
+		app.parseAndTranslate('alert', params, function (html) {
+			var alert = $('#' + params.alert_id);
+			if (alert.length) {
+				return updateAlert(alert, params);
+			}
+			alert = html;
+			alert.fadeIn(200);
 
-				components.get('toaster/tray').prepend(alert);
+			components.get('toaster/tray').prepend(alert);
 
-				if (typeof params.closefn === 'function') {
-					alert.find('button').on('click', function () {
-						params.closefn();
+			if (typeof params.closefn === 'function') {
+				alert.find('button').on('click', function () {
+					params.closefn();
+					fadeOut(alert);
+					return false;
+				});
+			}
+
+			if (params.timeout) {
+				startTimeout(alert, params);
+			}
+
+			if (typeof params.clickfn === 'function') {
+				alert
+					.addClass('pointer')
+					.on('click', function (e) {
+						if (!$(e.target).is('.close')) {
+							params.clickfn(alert, params);
+						}
 						fadeOut(alert);
-						return false;
 					});
-				}
+			}
 
-				if (params.timeout) {
-					startTimeout(alert, params.timeout);
-				}
-
-				if (typeof params.clickfn === 'function') {
-					alert
-						.addClass('pointer')
-						.on('click', function (e) {
-							if (!$(e.target).is('.close')) {
-								params.clickfn();
-							}
-							fadeOut(alert);
-						});
-				}
-			});
+			hooks.fire('action:alert.new', { alert, params });
 		});
 	}
 
@@ -67,13 +67,14 @@ define('alerts', ['translator', 'components', 'benchpress'], function (translato
 
 		clearTimeout(parseInt(alert.attr('timeoutId'), 10));
 		if (params.timeout) {
-			startTimeout(alert, params.timeout);
+			startTimeout(alert, params);
 		}
 
 		alert.children().fadeOut(100);
 		translator.translate(alert.html(), function (translatedHTML) {
 			alert.children().fadeIn(100);
 			alert.html(translatedHTML);
+			hooks.fire('action:alert.update', { alert, params });
 		});
 
 		// Handle changes in the clickfn
@@ -96,9 +97,15 @@ define('alerts', ['translator', 'components', 'benchpress'], function (translato
 		});
 	}
 
-	function startTimeout(alert, timeout) {
+	function startTimeout(alert, params) {
+		var timeout = params.timeout;
+
 		var timeoutId = setTimeout(function () {
 			fadeOut(alert);
+
+			if (typeof params.timeoutfn === 'function') {
+				params.timeoutfn(alert, params);
+			}
 		}, timeout);
 
 		alert.attr('timeoutId', timeoutId);
@@ -111,6 +118,7 @@ define('alerts', ['translator', 'components', 'benchpress'], function (translato
 			alert.css('transition-property', '');
 			alert.css('transition', 'width ' + (timeout + 450) + 'ms linear, background-color ' + (timeout + 450) + 'ms ease-in');
 			alert.addClass('animate');
+			hooks.fire('action:alert.animate', { alert, params });
 		}, 50);
 
 		// Handle mouseenter/mouseleave

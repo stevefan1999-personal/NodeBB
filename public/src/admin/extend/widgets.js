@@ -1,18 +1,22 @@
 'use strict';
 
 
-define('admin/extend/widgets', ['jqueryui'], function () {
+define('admin/extend/widgets', [
+	'jquery-ui/widgets/sortable',
+	'jquery-ui/widgets/draggable',
+	'jquery-ui/widgets/droppable',
+	'jquery-ui/widgets/datepicker',
+], function () {
 	var Widgets = {};
 
 	Widgets.init = function () {
-		$('#widgets .nav-pills a').on('click', function (ev) {
+		$('#widgets .nav-pills .dropdown-menu a').on('click', function (ev) {
 			var $this = $(this);
-			$('#widgets .nav-pills li').removeClass('active');
-			$this.parent().addClass('active');
-
 			$('#widgets .tab-pane').removeClass('active');
-			$('#widgets .tab-pane[data-template="' + $this.attr('data-template') + '"]').addClass('active');
-
+			var templateName = $this.attr('data-template');
+			$('#widgets .tab-pane[data-template="' + templateName + '"]').addClass('active');
+			$('#widgets .selected-template').text(templateName);
+			$('#widgets .nav-pills .dropdown').trigger('click');
 			ev.preventDefault();
 			return false;
 		});
@@ -177,7 +181,8 @@ define('admin/extend/widgets', ['jqueryui'], function () {
 				})
 				.children('.panel-heading')
 				.append('<div class="pull-right pointer"><span class="delete-widget"><i class="fa fa-times-circle"></i></span></div><div class="pull-left pointer"><span class="toggle-widget"><i class="fa fa-chevron-circle-down"></i></span>&nbsp;</div>')
-				.children('small').html('');
+				.children('small')
+				.html('');
 		}
 	}
 
@@ -202,7 +207,7 @@ define('admin/extend/widgets', ['jqueryui'], function () {
 			return widget;
 		}
 
-		$.get(RELATIVE_PATH + '/api/admin/extend/widgets', function (data) {
+		$.get(config.relative_path + '/api/admin/extend/widgets', function (data) {
 			var areas = data.areas;
 
 			for (var i = 0; i < areas.length; i += 1) {

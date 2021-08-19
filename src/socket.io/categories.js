@@ -1,220 +1,175 @@
 'use strict';
 
-var async = require('async');
-var db = require('../database');
-var categories = require('../categories');
-var privileges = require('../privileges');
-var user = require('../user');
-var topics = require('../topics');
-var apiController = require('../controllers/api');
+const categories = require('../categories');
+const privileges = require('../privileges');
+const user = require('../user');
+const topics = require('../topics');
+const api = require('../api');
+const sockets = require('.');
 
-var SocketCategories = module.exports;
+const SocketCategories = module.exports;
 
-SocketCategories.getRecentReplies = function (socket, cid, callback) {
-	categories.getRecentReplies(cid, socket.uid, 4, callback);
+require('./categories/search')(SocketCategories);
+
+SocketCategories.getRecentReplies = async function (socket, cid) {
+	return await categories.getRecentReplies(cid, socket.uid, 4);
 };
 
-SocketCategories.get = function (socket, data, callback) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				isAdmin: async.apply(user.isAdministrator, socket.uid),
-				categories: function (next) {
-					async.waterfall([
-						async.apply(db.getSortedSetRange, 'categories:cid', 0, -1),
-						async.apply(categories.getCategoriesData),
-					], next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			results.categories = results.categories.filter(function (category) {
-				return category && (!category.disabled || results.isAdmin);
-			});
-
-			next(null, results.categories);
-		},
-	], callback);
+SocketCategories.get = async function (socket) {
+	async function getCategories() {
+		const cids = await categories.getCidsByPrivilege('categories:cid', socket.uid, 'find');
+		return await categories.getCategoriesData(cids);
+	}
+	const [isAdmin, categoriesData] = await Promise.all([
+		user.isAdministrator(socket.uid),
+		getCategories(),
+	]);
+	return categoriesData.filter(category => category && (!category.disabled || isAdmin));
 };
 
-SocketCategories.getWatchedCategories = function (socket, data, callback) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				categories: async.apply(categories.getCategoriesByPrivilege, 'cid:0:children', socket.uid, 'find'),
-				ignoredCids: async.apply(user.getIgnoredCategories, socket.uid),
-			}, next);
-		},
-		function (results, next) {
-			var watchedCategories = results.categories.filter(function (category) {
-				return category && results.ignoredCids.indexOf(category.cid.toString()) === -1;
-			});
-
-			next(null, watchedCategories);
-		},
-	], callback);
+SocketCategories.getWatchedCategories = async function (socket) {
+	const [categoriesData, ignoredCids] = await Promise.all([
+		categories.getCategoriesByPrivilege('cid:0:children', socket.uid, 'find'),
+		user.getIgnoredCategories(socket.uid),
+	]);
+	return categoriesData.filter(category => category && !ignoredCids.includes(String(category.cid)));
 };
 
-SocketCategories.loadMore = function (socket, data, callback) {
+SocketCategories.loadMore = async function (socket, data) {
 	if (!data) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
 	data.query = data.query || {};
-	var userPrivileges;
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				privileges: function (next) {
-					privileges.categories.get(data.cid, socket.uid, next);
-				},
-				settings: function (next) {
-					user.getSettings(socket.uid, next);
-				},
-				targetUid: function (next) {
-					if (data.query.author) {
-						user.getUidByUserslug(data.query.author, next);
-					} else {
-						next();
-					}
-				},
-			}, next);
-		},
-		function (results, next) {
-			userPrivileges = results.privileges;
-			if (!userPrivileges.read) {
-				return callback(new Error('[[error:no-privileges]]'));
-			}
-			var infScrollTopicsPerPage = 20;
-			var sort = data.sort || data.categoryTopicSort;
+	const [userPrivileges, settings, targetUid] = await Promise.all([
+		privileges.categories.get(data.cid, socket.uid),
+		user.getSettings(socket.uid),
+		user.getUidByUserslug(data.query.author),
+	]);
 
-			var start = Math.max(0, parseInt(data.after, 10));
+	if (!userPrivileges.read) {
+		throw new Error('[[error:no-privileges]]');
+	}
 
-			if (data.direction === -1) {
-				start -= infScrollTopicsPerPage;
-			}
+	const infScrollTopicsPerPage = 20;
+	const sort = data.sort || data.categoryTopicSort;
 
-			var stop = start + infScrollTopicsPerPage - 1;
+	let start = Math.max(0, parseInt(data.after, 10));
 
-			start = Math.max(0, start);
-			stop = Math.max(0, stop);
-			categories.getCategoryTopics({
-				uid: socket.uid,
-				cid: data.cid,
-				start: start,
-				stop: stop,
-				sort: sort,
-				settings: results.settings,
-				query: data.query,
-				tag: data.query.tag,
-				targetUid: results.targetUid,
-			}, next);
-		},
-		function (data, next) {
-			categories.modifyTopicsByPrivilege(data.topics, userPrivileges);
+	if (data.direction === -1) {
+		start -= infScrollTopicsPerPage;
+	}
 
-			data.privileges = userPrivileges;
-			data.template = {
-				category: true,
-				name: 'category',
-			};
+	let stop = start + infScrollTopicsPerPage - 1;
 
-			next(null, data);
-		},
-	], callback);
+	start = Math.max(0, start);
+	stop = Math.max(0, stop);
+	const result = await categories.getCategoryTopics({
+		uid: socket.uid,
+		cid: data.cid,
+		start: start,
+		stop: stop,
+		sort: sort,
+		settings: settings,
+		query: data.query,
+		tag: data.query.tag,
+		targetUid: targetUid,
+	});
+	categories.modifyTopicsByPrivilege(result.topics, userPrivileges);
+
+	result.privileges = userPrivileges;
+	result.template = {
+		category: true,
+		name: 'category',
+	};
+	return result;
 };
 
-SocketCategories.getPageCount = function (socket, cid, callback) {
-	categories.getPageCount(cid, socket.uid, callback);
+SocketCategories.getTopicCount = async function (socket, cid) {
+	return await categories.getCategoryField(cid, 'topic_count');
 };
 
-SocketCategories.getTopicCount = function (socket, cid, callback) {
-	categories.getCategoryField(cid, 'topic_count', callback);
+SocketCategories.getCategoriesByPrivilege = async function (socket, privilege) {
+	return await categories.getCategoriesByPrivilege('categories:cid', socket.uid, privilege);
 };
 
-SocketCategories.getCategoriesByPrivilege = function (socket, privilege, callback) {
-	categories.getCategoriesByPrivilege('categories:cid', socket.uid, privilege, callback);
+SocketCategories.getMoveCategories = async function (socket, data) {
+	return await SocketCategories.getSelectCategories(socket, data);
 };
 
-SocketCategories.getMoveCategories = function (socket, data, callback) {
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				isAdmin: async.apply(user.isAdministrator, socket.uid),
-				categories: function (next) {
-					async.waterfall([
-						function (next) {
-							db.getSortedSetRange('cid:0:children', 0, -1, next);
-						},
-						function (cids, next) {
-							categories.getCategories(cids, socket.uid, next);
-						},
-						function (categoriesData, next) {
-							categories.buildForSelectCategories(categoriesData, next);
-						},
-					], next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			results.categories = results.categories.filter(function (category) {
-				return category && (!category.disabled || results.isAdmin) && !category.link;
-			});
-
-			next(null, results.categories);
-		},
-	], callback);
+SocketCategories.getSelectCategories = async function (socket) {
+	const [isAdmin, categoriesData] = await Promise.all([
+		user.isAdministrator(socket.uid),
+		categories.buildForSelect(socket.uid, 'find', ['disabled', 'link']),
+	]);
+	return categoriesData.filter(category => category && (!category.disabled || isAdmin) && !category.link);
 };
 
-SocketCategories.watch = function (socket, cid, callback) {
-	ignoreOrWatch(user.watchCategory, socket, cid, callback);
+SocketCategories.setWatchState = async function (socket, data) {
+	if (!data || !data.cid || !data.state) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	return await ignoreOrWatch(async (uid, cids) => {
+		await user.setCategoryWatchState(uid, cids, categories.watchStates[data.state]);
+	}, socket, data);
 };
 
-SocketCategories.ignore = function (socket, cid, callback) {
-	ignoreOrWatch(user.ignoreCategory, socket, cid, callback);
+SocketCategories.watch = async function (socket, data) {
+	return await ignoreOrWatch(user.watchCategory, socket, data);
 };
 
-function ignoreOrWatch(fn, socket, cid, callback) {
-	async.waterfall([
-		function (next) {
-			db.getSortedSetRange('categories:cid', 0, -1, next);
-		},
-		function (cids, next) {
-			categories.getCategoriesFields(cids, ['cid', 'parentCid'], next);
-		},
-		function (categoryData, next) {
-			categoryData.forEach(function (c) {
-				c.cid = parseInt(c.cid, 10);
-				c.parentCid = parseInt(c.parentCid, 10);
-			});
+SocketCategories.ignore = async function (socket, data) {
+	return await ignoreOrWatch(user.ignoreCategory, socket, data);
+};
 
-			var cids = [parseInt(cid, 10)];
+async function ignoreOrWatch(fn, socket, data) {
+	let targetUid = socket.uid;
+	const cids = Array.isArray(data.cid) ? data.cid.map(cid => parseInt(cid, 10)) : [parseInt(data.cid, 10)];
+	if (data.hasOwnProperty('uid')) {
+		targetUid = data.uid;
+	}
+	await user.isAdminOrGlobalModOrSelf(socket.uid, targetUid);
+	const allCids = await categories.getAllCidsFromSet('categories:cid');
+	const categoryData = await categories.getCategoriesFields(allCids, ['cid', 'parentCid']);
 
-			// filter to subcategories of cid
+	// filter to subcategories of cid
+	let cat;
+	do {
+		cat = categoryData.find(c => !cids.includes(c.cid) && cids.includes(c.parentCid));
+		if (cat) {
+			cids.push(cat.cid);
+		}
+	} while (cat);
 
-			var cat;
-			do {
-				cat = categoryData.find(function (c) {
-					return cids.indexOf(c.cid) === -1 && cids.indexOf(c.parentCid) !== -1;
-				});
-				if (cat) {
-					cids.push(cat.cid);
-				}
-			} while (cat);
-
-			async.each(cids, function (cid, next) {
-				fn(socket.uid, cid, next);
-			}, next);
-		},
-		function (next) {
-			topics.pushUnreadCount(socket.uid, next);
-		},
-	], callback);
+	await fn(targetUid, cids);
+	await topics.pushUnreadCount(targetUid);
+	return cids;
 }
 
-SocketCategories.isModerator = function (socket, cid, callback) {
-	user.isModerator(socket.uid, cid, callback);
+SocketCategories.isModerator = async function (socket, cid) {
+	return await user.isModerator(socket.uid, cid);
 };
 
-SocketCategories.getCategory = function (socket, cid, callback) {
-	apiController.getCategoryData(cid, socket.uid, callback);
+SocketCategories.getCategory = async function (socket, cid) {
+	sockets.warnDeprecated(socket, 'GET /api/v3/categories/:cid');
+	return await api.categories.get(socket, { cid });
+	// return await apiController.getCategoryData(cid, socket.uid);
 };
+
+SocketCategories.loadMoreSubCategories = async function (socket, data) {
+	if (!data || !data.cid || !(parseInt(data.start, 10) > 0)) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	const allowed = await privileges.categories.can('read', data.cid, socket.uid);
+	if (!allowed) {
+		throw new Error('[[error:no-privileges]]');
+	}
+	const category = await categories.getCategoryData(data.cid);
+	await categories.getChildrenTree(category, socket.uid);
+	const allCategories = [];
+	categories.flattenCategories(allCategories, category.children);
+	await categories.getRecentTopicReplies(allCategories, socket.uid);
+	const start = parseInt(data.start, 10);
+	return category.children.slice(start, start + category.subCategoriesPerPage);
+};
+
+require('../promisify')(SocketCategories);

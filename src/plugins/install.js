@@ -1,26 +1,37 @@
 'use strict';
 
-var winston = require('winston');
-var async = require('async');
-var path = require('path');
-var fs = require('fs');
-var nconf = require('nconf');
-var os = require('os');
-var cproc = require('child_process');
+const winston = require('winston');
+const path = require('path');
+const fs = require('fs');
+const nconf = require('nconf');
+const os = require('os');
+const cproc = require('child_process');
+const util = require('util');
+const request = require('request-promise-native');
 
-var db = require('../database');
-var meta = require('../meta');
-var pubsub = require('../pubsub');
-var events = require('../events');
+const db = require('../database');
+const meta = require('../meta');
+const pubsub = require('../pubsub');
+const { paths } = require('../constants');
 
-var packageManager = nconf.get('package_manager') === 'yarn' ? 'yarn' : 'npm';
-var packageManagerExecutable = packageManager;
-var packageManagerCommands = {
+const supportedPackageManagerList = require('../cli/package-install').supportedPackageManager;
+// load config from src/cli/package-install.js
+const packageManager = supportedPackageManagerList.indexOf(nconf.get('package_manager')) >= 0 ? nconf.get('package_manager') : 'npm';
+let packageManagerExecutable = packageManager;
+const packageManagerCommands = {
 	yarn: {
 		install: 'add',
 		uninstall: 'remove',
 	},
 	npm: {
+		install: 'install',
+		uninstall: 'uninstall',
+	},
+	cnpm: {
+		install: 'install',
+		uninstall: 'uninstall',
+	},
+	pnpm: {
 		install: 'install',
 		uninstall: 'uninstall',
 	},
@@ -31,145 +42,112 @@ if (process.platform === 'win32') {
 }
 
 module.exports = function (Plugins) {
-	if (nconf.get('isPrimary') === 'true') {
-		pubsub.on('plugins:toggleInstall', function (data) {
+	if (nconf.get('isPrimary')) {
+		pubsub.on('plugins:toggleInstall', (data) => {
 			if (data.hostname !== os.hostname()) {
 				toggleInstall(data.id, data.version);
 			}
 		});
 
-		pubsub.on('plugins:upgrade', function (data) {
+		pubsub.on('plugins:upgrade', (data) => {
 			if (data.hostname !== os.hostname()) {
 				upgrade(data.id, data.version);
 			}
 		});
 	}
 
-	Plugins.toggleActive = function (id, callback) {
-		callback = callback || function () {};
-		var isActive;
-		async.waterfall([
-			function (next) {
-				Plugins.isActive(id, next);
-			},
-			function (_isActive, next) {
-				isActive = _isActive;
-				if (isActive) {
-					db.sortedSetRemove('plugins:active', id, next);
-				} else {
-					db.sortedSetCard('plugins:active', function (err, count) {
-						if (err) {
-							return next(err);
-						}
-						db.sortedSetAdd('plugins:active', count, id, next);
-					});
-				}
-			},
-			function (next) {
-				meta.reloadRequired = true;
-				Plugins.fireHook(isActive ? 'action:plugin.deactivate' : 'action:plugin.activate', { id: id });
-				setImmediate(next);
-			},
-			function (next) {
-				events.log({
-					type: 'plugin-' + (isActive ? 'deactivate' : 'activate'),
-					text: id,
-				}, next);
-			},
-		], function (err) {
-			if (err) {
-				winston.warn('[plugins] Could not toggle active state on plugin \'' + id + '\'');
-				return callback(err);
-			}
-			callback(null, { id: id, active: !isActive });
+	Plugins.toggleActive = async function (id) {
+		const isActive = await Plugins.isActive(id);
+		if (isActive) {
+			await db.sortedSetRemove('plugins:active', id);
+		} else {
+			const count = await db.sortedSetCard('plugins:active');
+			await db.sortedSetAdd('plugins:active', count, id);
+		}
+		meta.reloadRequired = true;
+		Plugins.hooks.fire(isActive ? 'action:plugin.deactivate' : 'action:plugin.activate', { id: id });
+		return { id: id, active: !isActive };
+	};
+
+	Plugins.checkWhitelist = async function (id, version) {
+		const body = await request({
+			method: 'GET',
+			url: `https://packages.nodebb.org/api/v1/plugins/${encodeURIComponent(id)}`,
+			json: true,
 		});
+
+		if (body && body.code === 'ok' && (version === 'latest' || body.payload.valid.includes(version))) {
+			return;
+		}
+
+		throw new Error('[[error:plugin-not-whitelisted]]');
 	};
 
-	Plugins.toggleInstall = function (id, version, callback) {
+	Plugins.toggleInstall = async function (id, version) {
 		pubsub.publish('plugins:toggleInstall', { hostname: os.hostname(), id: id, version: version });
-		toggleInstall(id, version, callback);
+		return await toggleInstall(id, version);
 	};
 
-	function toggleInstall(id, version, callback) {
-		var installed;
-		var type;
-		async.waterfall([
-			function (next) {
-				Plugins.isInstalled(id, next);
-			},
-			function (_installed, next) {
-				installed = _installed;
-				type = installed ? 'uninstall' : 'install';
-				Plugins.isActive(id, next);
-			},
-			function (active, next) {
-				if (active) {
-					Plugins.toggleActive(id, function (err) {
-						next(err);
-					});
-					return;
-				}
-				setImmediate(next);
-			},
-			function (next) {
-				runPackageManagerCommand(type, id, version || 'latest', next);
-			},
-			function (next) {
-				Plugins.get(id, next);
-			},
-			function (pluginData, next) {
-				Plugins.fireHook('action:plugin.' + type, { id: id, version: version });
-				setImmediate(next, null, pluginData);
-			},
-		], callback);
+	const runPackageManagerCommandAsync = util.promisify(runPackageManagerCommand);
+
+	async function toggleInstall(id, version) {
+		const [installed, active] = await Promise.all([
+			Plugins.isInstalled(id),
+			Plugins.isActive(id),
+		]);
+		const type = installed ? 'uninstall' : 'install';
+		if (active) {
+			await Plugins.toggleActive(id);
+		}
+		await runPackageManagerCommandAsync(type, id, version || 'latest');
+		const pluginData = await Plugins.get(id);
+		Plugins.hooks.fire(`action:plugin.${type}`, { id: id, version: version });
+		return pluginData;
 	}
 
 	function runPackageManagerCommand(command, pkgName, version, callback) {
 		cproc.execFile(packageManagerExecutable, [
 			packageManagerCommands[packageManager][command],
-			pkgName + (command === 'install' ? '@' + version : ''),
+			pkgName + (command === 'install' ? `@${version}` : ''),
 			'--save',
-		], function (err, stdout) {
+		], (err, stdout) => {
 			if (err) {
 				return callback(err);
 			}
 
-			winston.verbose('[plugins/' + command + '] ' + stdout);
+			winston.verbose(`[plugins/${command}] ${stdout}`);
 			callback();
 		});
 	}
 
-	Plugins.upgrade = function (id, version, callback) {
+
+	Plugins.upgrade = async function (id, version) {
 		pubsub.publish('plugins:upgrade', { hostname: os.hostname(), id: id, version: version });
-		upgrade(id, version, callback);
+		return await upgrade(id, version);
 	};
 
-	function upgrade(id, version, callback) {
-		async.waterfall([
-			async.apply(runPackageManagerCommand, 'install', id, version || 'latest'),
-			function (next) {
-				Plugins.isActive(id, next);
-			},
-			function (isActive, next) {
-				meta.reloadRequired = isActive;
-				next(null, isActive);
-			},
-		], callback);
+	async function upgrade(id, version) {
+		await runPackageManagerCommandAsync('install', id, version || 'latest');
+		const isActive = await Plugins.isActive(id);
+		meta.reloadRequired = isActive;
+		return isActive;
 	}
 
-	Plugins.isInstalled = function (id, callback) {
-		var pluginDir = path.join(__dirname, '../../node_modules', id);
-
-		fs.stat(pluginDir, function (err, stats) {
-			callback(null, err ? false : stats.isDirectory());
-		});
+	Plugins.isInstalled = async function (id) {
+		const pluginDir = path.join(paths.nodeModules, id);
+		try {
+			const stats = await fs.promises.stat(pluginDir);
+			return stats.isDirectory();
+		} catch (err) {
+			return false;
+		}
 	};
 
-	Plugins.isActive = function (id, callback) {
-		db.isSortedSetMember('plugins:active', id, callback);
+	Plugins.isActive = async function (id) {
+		return await db.isSortedSetMember('plugins:active', id);
 	};
 
-	Plugins.getActive = function (callback) {
-		db.getSortedSetRange('plugins:active', 0, -1, callback);
+	Plugins.getActive = async function () {
+		return await db.getSortedSetRange('plugins:active', 0, -1);
 	};
 };

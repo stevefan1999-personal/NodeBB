@@ -1,180 +1,202 @@
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
-var _ = require('lodash');
+const validator = require('validator');
+const _ = require('lodash');
 
-var db = require('../database');
-var meta = require('../meta');
-var topics = require('../topics');
-var user = require('../user');
-var privileges = require('../privileges');
-var plugins = require('../plugins');
-var cache = require('./cache');
-var pubsub = require('../pubsub');
-var utils = require('../utils');
-var translator = require('../translator');
+const db = require('../database');
+const meta = require('../meta');
+const topics = require('../topics');
+const user = require('../user');
+const privileges = require('../privileges');
+const plugins = require('../plugins');
+const pubsub = require('../pubsub');
+const utils = require('../utils');
+const slugify = require('../slugify');
+const translator = require('../translator');
 
 module.exports = function (Posts) {
-	pubsub.on('post:edit', function (pid) {
-		cache.del(pid);
+	pubsub.on('post:edit', (pid) => {
+		require('./cache').del(pid);
 	});
 
-	Posts.edit = function (data, callback) {
-		var oldContent;	// for diffing purposes
-		var postData;
-		var results;
+	Posts.edit = async function (data) {
+		const canEdit = await privileges.posts.canEdit(data.pid, data.uid);
+		if (!canEdit.flag) {
+			throw new Error(canEdit.message);
+		}
+		const postData = await Posts.getPostData(data.pid);
+		if (!postData) {
+			throw new Error('[[error:no-post]]');
+		}
 
-		async.waterfall([
-			function (next) {
-				privileges.posts.canEdit(data.pid, data.uid, next);
-			},
-			function (canEdit, next) {
-				if (!canEdit.flag) {
-					return next(new Error(canEdit.message));
-				}
-				Posts.getPostData(data.pid, next);
-			},
-			function (_postData, next) {
-				if (!_postData) {
-					return next(new Error('[[error:no-post]]'));
-				}
+		const topicData = await topics.getTopicFields(postData.tid, ['cid', 'mainPid', 'title', 'timestamp', 'scheduled', 'slug']);
 
-				postData = _postData;
-				oldContent = postData.content;
-				postData.content = data.content;
-				postData.edited = Date.now();
-				postData.editor = data.uid;
-				if (data.handle) {
-					postData.handle = data.handle;
-				}
-				plugins.fireHook('filter:post.edit', { req: data.req, post: postData, data: data, uid: data.uid }, next);
-			},
-			function (result, next) {
-				postData = result.post;
+		await scheduledTopicCheck(data, topicData);
 
-				async.parallel({
-					editor: function (next) {
-						user.getUserFields(data.uid, ['username', 'userslug'], next);
-					},
-					topic: function (next) {
-						editMainPost(data, postData, next);
-					},
-				}, next);
-			},
-			function (_results, next) {
-				results = _results;
-				Posts.setPostFields(data.pid, postData, next);
-			},
-			function (next) {
-				if (parseInt(meta.config.enablePostHistory || 1, 10) !== 1) {
-					return setImmediate(next);
-				}
+		const oldContent = postData.content; // for diffing purposes
+		const editPostData = getEditPostData(data, topicData, postData);
 
-				Posts.diffs.save(data.pid, oldContent, data.content, next);
-			},
-			async.apply(Posts.uploads.sync, data.pid),
-			function (next) {
-				postData.cid = results.topic.cid;
-				postData.topic = results.topic;
-				plugins.fireHook('action:post.edit', { post: _.clone(postData), data: data, uid: data.uid });
+		if (data.handle) {
+			editPostData.handle = data.handle;
+		}
 
-				cache.del(String(postData.pid));
-				pubsub.publish('post:edit', String(postData.pid));
+		const result = await plugins.hooks.fire('filter:post.edit', {
+			req: data.req,
+			post: editPostData,
+			data: data,
+			uid: data.uid,
+		});
 
-				Posts.parsePost(postData, next);
-			},
-			function (postData, next) {
-				results.post = postData;
-				next(null, results);
-			},
-		], callback);
+		const [editor, topic] = await Promise.all([
+			user.getUserFields(data.uid, ['username', 'userslug']),
+			editMainPost(data, postData, topicData),
+		]);
+
+		await Posts.setPostFields(data.pid, result.post);
+
+		if (meta.config.enablePostHistory === 1) {
+			await Posts.diffs.save({
+				pid: data.pid,
+				uid: data.uid,
+				oldContent: oldContent,
+				newContent: data.content,
+				edited: editPostData.edited,
+			});
+		}
+		await Posts.uploads.sync(data.pid);
+
+		// Normalize data prior to constructing returnPostData (match types with getPostSummaryByPids)
+		postData.deleted = !!postData.deleted;
+
+		const returnPostData = { ...postData, ...result.post };
+		returnPostData.cid = topic.cid;
+		returnPostData.topic = topic;
+		returnPostData.editedISO = utils.toISOString(editPostData.edited);
+		returnPostData.changed = oldContent !== data.content;
+
+		await topics.notifyFollowers(returnPostData, data.uid, {
+			type: 'post-edit',
+			bodyShort: translator.compile('notifications:user_edited_post', editor.username, topic.title),
+			nid: `edit_post:${data.pid}:uid:${data.uid}`,
+		});
+
+		plugins.hooks.fire('action:post.edit', { post: _.clone(returnPostData), data: data, uid: data.uid });
+
+		require('./cache').del(String(postData.pid));
+		pubsub.publish('post:edit', String(postData.pid));
+
+		await Posts.parsePost(returnPostData);
+
+		return {
+			topic: topic,
+			editor: editor,
+			post: returnPostData,
+		};
 	};
 
-	function editMainPost(data, postData, callback) {
-		var tid = postData.tid;
-		var title = data.title ? data.title.trim() : '';
+	async function editMainPost(data, postData, topicData) {
+		const { tid } = postData;
+		const title = data.title ? data.title.trim() : '';
 
-		var topicData;
-		var results;
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					topic: function (next) {
-						topics.getTopicFields(tid, ['cid', 'title', 'timestamp'], next);
-					},
-					isMain: function (next) {
-						Posts.isMain(data.pid, next);
-					},
-				}, next);
-			},
-			function (_results, next) {
-				results = _results;
-				if (!results.isMain) {
-					return callback(null, {
-						tid: tid,
-						cid: results.topic.cid,
-						isMainPost: false,
-						renamed: false,
-					});
-				}
+		const isMain = parseInt(data.pid, 10) === parseInt(topicData.mainPid, 10);
+		if (!isMain) {
+			return {
+				tid: tid,
+				cid: topicData.cid,
+				title: validator.escape(String(topicData.title)),
+				isMainPost: false,
+				renamed: false,
+			};
+		}
 
-				topicData = {
-					tid: tid,
-					cid: results.topic.cid,
-					uid: postData.uid,
-					mainPid: data.pid,
-				};
+		const newTopicData = {
+			tid: tid,
+			cid: topicData.cid,
+			uid: postData.uid,
+			mainPid: data.pid,
+			timestamp: rescheduling(data, topicData) ? data.timestamp : topicData.timestamp,
+		};
+		if (title) {
+			newTopicData.title = title;
+			newTopicData.slug = `${tid}/${slugify(title) || 'topic'}`;
+		}
 
-				if (title) {
-					topicData.title = title;
-					topicData.slug = tid + '/' + (utils.slugify(title) || 'topic');
-				}
+		data.tags = data.tags || [];
 
-				topicData.thumb = data.thumb || '';
+		if (data.tags.length) {
+			const canTag = await privileges.categories.can('topics:tag', topicData.cid, data.uid);
+			if (!canTag) {
+				throw new Error('[[error:no-privileges]]');
+			}
+		}
+		await topics.validateTags(data.tags, topicData.cid, data.uid, tid);
 
-				data.tags = data.tags || [];
+		const results = await plugins.hooks.fire('filter:topic.edit', {
+			req: data.req,
+			topic: newTopicData,
+			data: data,
+		});
+		await db.setObject(`topic:${tid}`, results.topic);
+		await topics.updateTopicTags(tid, data.tags);
+		const tags = await topics.getTopicTagsObjects(tid);
 
-				if (!data.tags.length) {
-					return next(null, true);
-				}
+		if (rescheduling(data, topicData)) {
+			await topics.scheduled.reschedule(newTopicData);
+		}
 
-				privileges.categories.can('topics:tag', topicData.cid, data.uid, next);
-			},
-			function (canTag, next) {
-				if (!canTag) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
+		newTopicData.tags = data.tags;
+		newTopicData.oldTitle = topicData.title;
+		const renamed = translator.escape(validator.escape(String(title))) !== topicData.title;
+		plugins.hooks.fire('action:topic.edit', { topic: newTopicData, uid: data.uid });
+		return {
+			tid: tid,
+			cid: newTopicData.cid,
+			uid: postData.uid,
+			title: validator.escape(String(title)),
+			oldTitle: topicData.title,
+			slug: newTopicData.slug || topicData.slug,
+			isMainPost: true,
+			renamed: renamed,
+			rescheduled: rescheduling(data, topicData),
+			tags: tags,
+		};
+	}
 
-				plugins.fireHook('filter:topic.edit', { req: data.req, topic: topicData, data: data }, next);
-			},
-			function (results, next) {
-				db.setObject('topic:' + tid, results.topic, next);
-			},
-			function (next) {
-				topics.updateTopicTags(tid, data.tags, next);
-			},
-			function (next) {
-				topics.getTopicTagsObjects(tid, next);
-			},
-			function (tags, next) {
-				topicData.tags = data.tags;
-				topicData.oldTitle = results.topic.title;
-				topicData.timestamp = results.topic.timestamp;
-				var renamed = translator.escape(validator.escape(String(title))) !== results.topic.title;
-				plugins.fireHook('action:topic.edit', { topic: topicData, uid: data.uid });
-				next(null, {
-					tid: tid,
-					cid: topicData.cid,
-					uid: postData.uid,
-					title: validator.escape(String(title)),
-					oldTitle: results.topic.title,
-					slug: topicData.slug,
-					isMainPost: true,
-					renamed: renamed,
-					tags: tags,
-				});
-			},
-		], callback);
+	async function scheduledTopicCheck(data, topicData) {
+		if (!topicData.scheduled) {
+			return;
+		}
+		const canSchedule = await privileges.categories.can('topics:schedule', topicData.cid, data.uid);
+		if (!canSchedule) {
+			throw new Error('[[error:no-privileges]]');
+		}
+		const isMain = parseInt(data.pid, 10) === parseInt(topicData.mainPid, 10);
+		if (isMain && (isNaN(data.timestamp) || data.timestamp < Date.now())) {
+			throw new Error('[[error:invalid-data]]');
+		}
+	}
+
+	function getEditPostData(data, topicData, postData) {
+		const editPostData = {
+			content: data.content,
+			editor: data.uid,
+		};
+
+		// For posts in scheduled topics, if edited before, use edit timestamp
+		editPostData.edited = topicData.scheduled ? (postData.edited || postData.timestamp) + 1 : Date.now();
+
+		// if rescheduling the main post
+		if (rescheduling(data, topicData)) {
+			// For main posts, use timestamp coming from user (otherwise, it is ignored)
+			editPostData.edited = data.timestamp;
+			editPostData.timestamp = data.timestamp;
+		}
+
+		return editPostData;
+	}
+
+	function rescheduling(data, topicData) {
+		const isMain = parseInt(data.pid, 10) === parseInt(topicData.mainPid, 10);
+		return isMain && topicData.scheduled && topicData.timestamp !== data.timestamp;
 	}
 };

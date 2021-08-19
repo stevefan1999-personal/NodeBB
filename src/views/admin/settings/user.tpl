@@ -4,20 +4,6 @@
 	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/user:authentication]]</div>
 	<div class="col-sm-10 col-xs-12">
 		<form role="form">
-			<div class="checkbox">
-				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input class="mdl-switch__input" type="checkbox" data-field="allowLocalLogin" checked>
-					<span class="mdl-switch__label"><strong>[[admin/settings/user:allow-local-login]]</strong></span>
-				</label>
-			</div>
-
-			<div class="checkbox">
-				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input class="mdl-switch__input" type="checkbox" data-field="requireEmailConfirmation">
-					<span class="mdl-switch__label"><strong>[[admin/settings/user:require-email-confirmation]]</strong></span>
-				</label>
-			</div>
-
 			<div class="form-group form-inline">
 				<label for="emailConfirmInterval">[[admin/settings/user:email-confirm-interval]]</label>
 				<input class="form-control" data-field="emailConfirmInterval" type="number" id="emailConfirmInterval" placeholder="Default: 10"
@@ -41,6 +27,13 @@
 	<div class="col-sm-2 col-xs-12 settings-header">[[admin/settings/user:account-settings]]</div>
 	<div class="col-sm-10 col-xs-12">
 		<form>
+			<div class="checkbox">
+				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" data-field="gdpr_enabled">
+					<span class="mdl-switch__label"><strong>[[admin/settings/user:gdpr_enabled]]</strong></span>
+				</label>
+				<p class="help-block">[[admin/settings/user:gdpr_enabled_help]]</p>
+			</div>
 			<div class="checkbox">
 				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
 					<input class="mdl-switch__input" type="checkbox" data-field="username:disableEdit">
@@ -67,12 +60,6 @@
 			</div>
 			<div class="checkbox">
 				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
-					<input class="mdl-switch__input" type="checkbox" data-field="privateUserInfo">
-					<span class="mdl-switch__label"><strong>[[admin/settings/user:user-info-private]]</strong></span>
-				</label>
-			</div>
-			<div class="checkbox">
-				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
 					<input class="mdl-switch__input" type="checkbox" data-field="hideFullname">
 					<span class="mdl-switch__label"><strong>[[admin/settings/user:hide-fullname]]</strong></span>
 				</label>
@@ -81,6 +68,12 @@
 				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
 					<input class="mdl-switch__input" type="checkbox" data-field="hideEmail">
 					<span class="mdl-switch__label"><strong>[[admin/settings/user:hide-email]]</strong></span>
+				</label>
+			</div>
+			<div class="checkbox">
+				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" data-field="showFullnameAsDisplayName">
+					<span class="mdl-switch__label"><strong>[[admin/settings/user:show-fullname-as-displayname]]</strong></span>
 				</label>
 			</div>
 		</form>
@@ -133,17 +126,33 @@
 
 <div class="row">
 	<div class="col-sm-2 col-xs-12 settings-header">
-		Session time
+		[[admin/settings/user:session-time]]
 	</div>
 	<div class="col-sm-10 col-xs-12">
 		<form>
+			<div class="row">
+				<div class="col-sm-6">
+					<div class="form-group">
+						<label>[[admin/settings/user:session-time-days]]</label>
+						<input type="text" class="form-control" data-field="loginDays" placeholder="[[admin/settings/user:session-time-days]]" />
+					</div>
+				</div>
+				<div class="col-sm-6">
+					<div class="form-group">
+						<label>[[admin/settings/user:session-time-seconds]]</label>
+						<input type="text" class="form-control" data-field="loginSeconds" placeholder="[[admin/settings/user:session-time-seconds]]" />
+					</div>
+				</div>
+				<div class="col-xs-12">
+					<p class="help-block">
+						[[admin/settings/user:session-time-help]]
+					</p>
+				</div>
+			</div>
 			<div class="form-group">
-				<label>Days: </label>
-				<input type="text" class="form-control" data-field="loginDays" placeholder="Days" />
-				<label>Seconds: </label>
-				<input type="text" class="form-control" data-field="loginSeconds" placeholder="Seconds" />
-				<p class="help-block">Note that only one of these values will be used. If there is no <i>seconds</i> value we fall back to <i>days</i>. If
-					there is no <i>days</i> value we default to <i>14 days</i>.</p>
+				<label>[[admin/settings/user:online-cutoff]]</label>
+				<input type="text" class="form-control" data-field="onlineCutoff">
+				<p class="help-block">[[admin/settings/user:online-cutoff-help]]</p>
 			</div>
 		</form>
 	</div>
@@ -157,8 +166,6 @@
 				<label>[[admin/settings/user:registration-type]]</label>
 				<select class="form-control" data-field="registrationType">
 					<option value="normal">[[admin/settings/user:registration-type.normal]]</option>
-					<option value="admin-approval">[[admin/settings/user:registration-type.admin-approval]]</option>
-					<option value="admin-approval-ip">[[admin/settings/user:registration-type.admin-approval-ip]]</option>
 					<option value="invite-only">[[admin/settings/user:registration-type.invite-only]]</option>
 					<option value="admin-invite-only">[[admin/settings/user:registration-type.admin-invite-only]]</option>
 					<option value="disabled">[[admin/settings/user:registration-type.disabled]]</option>
@@ -166,6 +173,30 @@
 				<p class="help-block">
 					[[admin/settings/user:registration-type.help, {config.relative_path}]]
 				</p>
+			</div>
+			<div class="form-group">
+				<label>[[admin/settings/user:registration-approval-type]]</label>
+				<select class="form-control" data-field="registrationApprovalType">
+					<option value="normal">[[admin/settings/user:registration-type.normal]]</option>
+					<option value="admin-approval">[[admin/settings/user:registration-type.admin-approval]]</option>
+					<option value="admin-approval-ip">[[admin/settings/user:registration-type.admin-approval-ip]]</option>
+				</select>
+				<p class="help-block">
+					[[admin/settings/user:registration-approval-type.help, {config.relative_path}]]
+				</p>
+			</div>
+			<div class="form-group">
+				<label>[[admin/settings/user:registration-queue-auto-approve-time]]</label>
+				<input type="number" class="form-control" data-field="autoApproveTime" placeholder="0">
+				<p class="help-block">
+					[[admin/settings/user:registration-queue-auto-approve-time-help]]
+				</p>
+			</div>
+			<div class="checkbox">
+				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" data-field="showAverageApprovalTime">
+					<span class="mdl-switch__label"><strong>[[admin/settings/user:registration-queue-show-average-time]]</strong></span>
+				</label>
 			</div>
 			<div class="form-group">
 				<label>[[admin/settings/user:max-invites]]</label>
@@ -267,6 +298,13 @@
 				</label>
 			</div>
 
+			<div class="checkbox">
+				<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+					<input class="mdl-switch__input" type="checkbox" data-field="updateUrlWithPostIndex">
+					<span class="mdl-switch__label"><strong>[[admin/settings/user:update-url-with-post-index]]</strong></span>
+				</label>
+			</div>
+
 			<div class="form-group">
 				<label>[[admin/settings/user:digest-freq]]</label>
 				<select class="form-control" data-field="dailyDigestFreq">
@@ -289,6 +327,15 @@
 					<input class="mdl-switch__input" type="checkbox" data-field="followTopicsOnReply">
 					<span class="mdl-switch__label"><strong>[[admin/settings/user:follow-replied-topics]]</strong></span>
 				</label>
+			</div>
+
+			<div class="form-group">
+				<label>[[admin/settings/user:categoryWatchState]]</label>
+				<select class="form-control" data-field="categoryWatchState">
+					<option value="watching">[[admin/settings/user:categoryWatchState.watching]]</option>
+					<option value="notwatching">[[admin/settings/user:categoryWatchState.notwatching]]</option>
+					<option value="ignoring">[[admin/settings/user:categoryWatchState.ignoring]]</option>
+				</select>
 			</div>
 
 			<label>[[admin/settings/user:default-notification-settings]]</label>

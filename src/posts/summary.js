@@ -1,143 +1,90 @@
 
 'use strict';
 
-var async = require('async');
-var validator = require('validator');
-var _ = require('lodash');
+const validator = require('validator');
+const _ = require('lodash');
 
-var topics = require('../topics');
-var user = require('../user');
-var plugins = require('../plugins');
-var categories = require('../categories');
-var utils = require('../utils');
+const topics = require('../topics');
+const user = require('../user');
+const plugins = require('../plugins');
+const categories = require('../categories');
+const utils = require('../utils');
 
 module.exports = function (Posts) {
-	Posts.getPostSummaryByPids = function (pids, uid, options, callback) {
+	Posts.getPostSummaryByPids = async function (pids, uid, options) {
 		if (!Array.isArray(pids) || !pids.length) {
-			return callback(null, []);
+			return [];
 		}
 
 		options.stripTags = options.hasOwnProperty('stripTags') ? options.stripTags : false;
 		options.parse = options.hasOwnProperty('parse') ? options.parse : true;
 		options.extraFields = options.hasOwnProperty('extraFields') ? options.extraFields : [];
 
-		var fields = ['pid', 'tid', 'content', 'uid', 'timestamp', 'deleted', 'upvotes', 'downvotes'].concat(options.extraFields);
+		const fields = ['pid', 'tid', 'content', 'uid', 'timestamp', 'deleted', 'upvotes', 'downvotes', 'replies', 'handle'].concat(options.extraFields);
 
-		var posts;
-		async.waterfall([
-			function (next) {
-				Posts.getPostsFields(pids, fields, next);
-			},
-			function (_posts, next) {
-				posts = _posts.filter(Boolean);
-				user.blocks.filter(uid, posts, next);
-			},
-			function (_posts, next) {
-				var uids = [];
-				var topicKeys = [];
+		let posts = await Posts.getPostsFields(pids, fields);
+		posts = posts.filter(Boolean);
+		posts = await user.blocks.filter(uid, posts);
 
-				posts.forEach(function (post, i) {
-					if (uids.indexOf(posts[i].uid) === -1) {
-						uids.push(posts[i].uid);
-					}
-					if (topicKeys.indexOf(posts[i].tid) === -1) {
-						topicKeys.push(posts[i].tid);
-					}
-				});
-				async.parallel({
-					users: function (next) {
-						user.getUsersFields(uids, ['uid', 'username', 'userslug', 'picture'], next);
-					},
-					topicsAndCategories: function (next) {
-						getTopicAndCategories(topicKeys, next);
-					},
-				}, next);
-			},
-			function (results, next) {
-				results.users = toObject('uid', results.users);
-				results.topics = toObject('tid', results.topicsAndCategories.topics);
-				results.categories = toObject('cid', results.topicsAndCategories.categories);
+		const uids = _.uniq(posts.map(p => p && p.uid));
+		const tids = _.uniq(posts.map(p => p && p.tid));
 
-				posts.forEach(function (post) {
-					// If the post author isn't represented in the retrieved users' data, then it means they were deleted, assume guest.
-					if (!results.users.hasOwnProperty(post.uid)) {
-						post.uid = 0;
-					}
-					post.user = results.users[post.uid];
-					post.topic = results.topics[post.tid];
-					post.category = post.topic && results.categories[post.topic.cid];
-					post.isMainPost = post.topic && parseInt(post.pid, 10) === parseInt(post.topic.mainPid, 10);
-					post.deleted = parseInt(post.deleted, 10) === 1;
-					post.upvotes = parseInt(post.upvotes, 10) || 0;
-					post.downvotes = parseInt(post.downvotes, 10) || 0;
-					post.votes = post.upvotes - post.downvotes;
-					post.timestampISO = utils.toISOString(post.timestamp);
-				});
+		const [users, topicsAndCategories] = await Promise.all([
+			user.getUsersFields(uids, ['uid', 'username', 'userslug', 'picture', 'status']),
+			getTopicAndCategories(tids),
+		]);
 
-				posts = posts.filter(function (post) {
-					return results.topics[post.tid];
-				});
+		const uidToUser = toObject('uid', users);
+		const tidToTopic = toObject('tid', topicsAndCategories.topics);
+		const cidToCategory = toObject('cid', topicsAndCategories.categories);
 
-				parsePosts(posts, options, next);
-			},
-			function (posts, next) {
-				plugins.fireHook('filter:post.getPostSummaryByPids', { posts: posts, uid: uid }, next);
-			},
-			function (data, next) {
-				next(null, data.posts);
-			},
-		], callback);
+		posts.forEach((post) => {
+			// If the post author isn't represented in the retrieved users' data,
+			// then it means they were deleted, assume guest.
+			if (!uidToUser.hasOwnProperty(post.uid)) {
+				post.uid = 0;
+			}
+			post.user = uidToUser[post.uid];
+			Posts.overrideGuestHandle(post, post.handle);
+			post.handle = undefined;
+			post.topic = tidToTopic[post.tid];
+			post.category = post.topic && cidToCategory[post.topic.cid];
+			post.isMainPost = post.topic && post.pid === post.topic.mainPid;
+			post.deleted = post.deleted === 1;
+			post.timestampISO = utils.toISOString(post.timestamp);
+		});
+
+		posts = posts.filter(post => tidToTopic[post.tid]);
+
+		posts = await parsePosts(posts, options);
+		const result = await plugins.hooks.fire('filter:post.getPostSummaryByPids', { posts: posts, uid: uid });
+		return result.posts;
 	};
 
-	function parsePosts(posts, options, callback) {
-		async.map(posts, function (post, next) {
-			async.waterfall([
-				function (next) {
-					if (!post.content || !options.parse) {
-						post.content = post.content ? validator.escape(String(post.content)) : post.content;
-						return next(null, post);
-					}
-					Posts.parsePost(post, next);
-				},
-				function (post, next) {
-					if (options.stripTags) {
-						post.content = stripTags(post.content);
-					}
-					next(null, post);
-				},
-			], next);
-		}, callback);
+	async function parsePosts(posts, options) {
+		return await Promise.all(posts.map(async (post) => {
+			if (!post.content || !options.parse) {
+				post.content = post.content ? validator.escape(String(post.content)) : post.content;
+				return post;
+			}
+			post = await Posts.parsePost(post);
+			if (options.stripTags) {
+				post.content = stripTags(post.content);
+			}
+			return post;
+		}));
 	}
 
-	function getTopicAndCategories(tids, callback) {
-		var topicsData;
-		async.waterfall([
-			function (next) {
-				topics.getTopicsFields(tids, ['uid', 'tid', 'title', 'cid', 'slug', 'deleted', 'postcount', 'mainPid'], next);
-			},
-			function (_topicsData, next) {
-				topicsData = _topicsData;
-				var cids = topicsData.map(function (topic) {
-					if (topic) {
-						topic.title = String(topic.title);
-						topic.deleted = parseInt(topic.deleted, 10) === 1;
-					}
-					return topic && parseInt(topic.cid, 10);
-				});
-
-				cids = _.uniq(cids);
-
-				categories.getCategoriesFields(cids, ['cid', 'name', 'icon', 'slug', 'parentCid', 'bgColor', 'color'], next);
-			},
-			function (categoriesData, next) {
-				next(null, { topics: topicsData, categories: categoriesData });
-			},
-		], callback);
+	async function getTopicAndCategories(tids) {
+		const topicsData = await topics.getTopicsFields(tids, ['uid', 'tid', 'title', 'cid', 'slug', 'deleted', 'scheduled', 'postcount', 'mainPid', 'teaserPid']);
+		const cids = _.uniq(topicsData.map(topic => topic && topic.cid));
+		const categoriesData = await categories.getCategoriesFields(cids, ['cid', 'name', 'icon', 'slug', 'parentCid', 'bgColor', 'color', 'backgroundImage', 'imageClass']);
+		return { topics: topicsData, categories: categoriesData };
 	}
 
 	function toObject(key, data) {
-		var obj = {};
-		for (var i = 0; i < data.length; i += 1) {
+		const obj = {};
+		for (let i = 0; i < data.length; i += 1) {
 			obj[data[i][key]] = data[i];
 		}
 		return obj;

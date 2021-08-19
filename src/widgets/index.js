@@ -1,252 +1,214 @@
 'use strict';
 
-var async = require('async');
-var winston = require('winston');
-var _ = require('lodash');
-var Benchpress = require('benchpressjs');
+const winston = require('winston');
+const _ = require('lodash');
+const Benchpress = require('benchpressjs');
 
-var plugins = require('../plugins');
-var translator = require('../translator');
-var db = require('../database');
-var apiController = require('../controllers/api');
-var meta = require('../meta');
+const plugins = require('../plugins');
+const groups = require('../groups');
+const translator = require('../translator');
+const db = require('../database');
+const apiController = require('../controllers/api');
+const meta = require('../meta');
 
-var widgets = module.exports;
+const widgets = module.exports;
 
-widgets.render = function (uid, options, callback) {
+widgets.render = async function (uid, options) {
 	if (!options.template) {
-		return callback(new Error('[[error:invalid-data]]'));
+		throw new Error('[[error:invalid-data]]');
 	}
+	const data = await widgets.getWidgetDataForTemplates(['global', options.template]);
+	delete data.global.drafts;
 
-	async.waterfall([
-		function (next) {
-			widgets.getWidgetDataForTemplates(['global', options.template], next);
-		},
-		function (data, next) {
-			var widgetsByLocation = {};
+	const locations = _.uniq(Object.keys(data.global).concat(Object.keys(data[options.template])));
 
-			delete data.global.drafts;
+	const widgetData = await Promise.all(locations.map(location => renderLocation(location, data, uid, options)));
 
-			var locations = _.uniq(Object.keys(data.global).concat(Object.keys(data[options.template])));
-
-			var returnData = {};
-
-			async.each(locations, function (location, done) {
-				widgetsByLocation[location] = (data[options.template][location] || []).concat(data.global[location] || []);
-
-				if (!widgetsByLocation[location].length) {
-					return done(null, { location: location, widgets: [] });
-				}
-
-				async.map(widgetsByLocation[location], function (widget, next) {
-					if (!widget || !widget.data ||
-						(!!widget.data['hide-registered'] && uid !== 0) ||
-						(!!widget.data['hide-guests'] && uid === 0) ||
-						(!!widget.data['hide-mobile'] && options.req.useragent.isMobile)) {
-						return next();
-					}
-
-					renderWidget(widget, uid, options, next);
-				}, function (err, renderedWidgets) {
-					if (err) {
-						return done(err);
-					}
-					returnData[location] = renderedWidgets.filter(Boolean);
-					done();
-				});
-			}, function (err) {
-				next(err, returnData);
-			});
-		},
-	], callback);
-};
-
-function renderWidget(widget, uid, options, callback) {
-	var userLang;
-	async.waterfall([
-		function (next) {
-			if (options.res.locals.isAPI) {
-				apiController.loadConfig(options.req, next);
-			} else {
-				next(null, options.res.locals.config || {});
-			}
-		},
-		function (config, next) {
-			userLang = config.userLang || meta.config.defaultLang || 'en-GB';
-			var templateData = _.assign({ }, options.templateData, { config: config });
-			plugins.fireHook('filter:widget.render:' + widget.widget, {
-				uid: uid,
-				area: options,
-				templateData: templateData,
-				data: widget.data,
-				req: options.req,
-				res: options.res,
-			}, next);
-		},
-		function (data, next) {
-			if (!data) {
-				return callback();
-			}
-			var html = data;
-			if (typeof html !== 'string') {
-				html = data.html;
-			} else {
-				winston.warn('[widgets.render] passing a string is deprecated!, filter:widget.render:' + widget.widget + '. Please set hookData.html in your plugin.');
-			}
-
-			if (widget.data.container && widget.data.container.match('{body}')) {
-				Benchpress.compileParse(widget.data.container, {
-					title: widget.data.title,
-					body: html,
-					template: data.templateData.template,
-				}, next);
-			} else {
-				next(null, html);
-			}
-		},
-		function (html, next) {
-			translator.translate(html, userLang, function (translatedHtml) {
-				next(null, { html: translatedHtml });
-			});
-		},
-	], callback);
-}
-
-widgets.getWidgetDataForTemplates = function (templates, callback) {
-	var keys = templates.map(function (tpl) {
-		return 'widgets:' + tpl;
+	const returnData = {};
+	locations.forEach((location, i) => {
+		if (Array.isArray(widgetData[i]) && widgetData[i].length) {
+			returnData[location] = widgetData[i].filter(Boolean);
+		}
 	});
 
-	async.waterfall([
-		function (next) {
-			db.getObjects(keys, next);
-		},
-		function (data, next) {
-			var returnData = {};
-
-			templates.forEach(function (template, index) {
-				returnData[template] = returnData[template] || {};
-
-				var templateWidgetData = data[index] || {};
-				var locations = Object.keys(templateWidgetData);
-
-				locations.forEach(function (location) {
-					if (templateWidgetData && templateWidgetData[location]) {
-						try {
-							returnData[template][location] = JSON.parse(templateWidgetData[location]);
-						} catch (err) {
-							winston.error('can not parse widget data. template:  ' + template + ' location: ' + location);
-							returnData[template][location] = [];
-						}
-					} else {
-						returnData[template][location] = [];
-					}
-				});
-			});
-
-			next(null, returnData);
-		},
-	], callback);
+	return returnData;
 };
 
-widgets.getArea = function (template, location, callback) {
-	async.waterfall([
-		function (next) {
-			db.getObjectField('widgets:' + template, location, next);
-		},
-		function (result, next) {
-			if (!result) {
-				return callback(null, []);
-			}
-			try {
-				result = JSON.parse(result);
-			} catch (err) {
-				return callback(err);
-			}
+async function renderLocation(location, data, uid, options) {
+	const widgetsAtLocation = (data[options.template][location] || []).concat(data.global[location] || []);
 
-			next(null, result);
-		},
-	], callback);
-};
-
-widgets.setArea = function (area, callback) {
-	if (!area.location || !area.template) {
-		return callback(new Error('Missing location and template data'));
+	if (!widgetsAtLocation.length) {
+		return [];
 	}
 
-	db.setObjectField('widgets:' + area.template, area.location, JSON.stringify(area.widgets), callback);
+	const renderedWidgets = await Promise.all(widgetsAtLocation.map(widget => renderWidget(widget, uid, options)));
+	return renderedWidgets;
+}
+
+async function renderWidget(widget, uid, options) {
+	if (!widget || !widget.data || (!!widget.data['hide-mobile'] && options.req.useragent.isMobile)) {
+		return;
+	}
+
+	const isVisible = await widgets.checkVisibility(widget.data, uid);
+	if (!isVisible) {
+		return;
+	}
+
+	let config = options.res.locals.config || {};
+	if (options.res.locals.isAPI) {
+		config = await apiController.loadConfig(options.req);
+	}
+
+	const userLang = config.userLang || meta.config.defaultLang || 'en-GB';
+	const templateData = _.assign({ }, options.templateData, { config: config });
+	const data = await plugins.hooks.fire(`filter:widget.render:${widget.widget}`, {
+		uid: uid,
+		area: options,
+		templateData: templateData,
+		data: widget.data,
+		req: options.req,
+		res: options.res,
+	});
+
+	if (!data) {
+		return;
+	}
+
+	let { html } = data;
+
+	if (widget.data.container && widget.data.container.match('{body}')) {
+		html = await Benchpress.compileRender(widget.data.container, {
+			title: widget.data.title,
+			body: html,
+			template: data.templateData && data.templateData.template,
+		});
+	}
+
+	if (html) {
+		html = await translator.translate(html, userLang);
+	}
+
+	return { html };
+}
+
+widgets.checkVisibility = async function (data, uid) {
+	let isVisible = true;
+	let isHidden = false;
+	if (data.groups.length) {
+		isVisible = await groups.isMemberOfAny(uid, data.groups);
+	}
+	if (data.groupsHideFrom.length) {
+		isHidden = await groups.isMemberOfAny(uid, data.groupsHideFrom);
+	}
+	return isVisible && !isHidden;
 };
 
-widgets.reset = function (callback) {
-	var defaultAreas = [
+widgets.getWidgetDataForTemplates = async function (templates) {
+	const keys = templates.map(tpl => `widgets:${tpl}`);
+	const data = await db.getObjects(keys);
+
+	const returnData = {};
+
+	templates.forEach((template, index) => {
+		returnData[template] = returnData[template] || {};
+
+		const templateWidgetData = data[index] || {};
+		const locations = Object.keys(templateWidgetData);
+
+		locations.forEach((location) => {
+			if (templateWidgetData && templateWidgetData[location]) {
+				try {
+					returnData[template][location] = parseWidgetData(templateWidgetData[location]);
+				} catch (err) {
+					winston.error(`can not parse widget data. template:  ${template} location: ${location}`);
+					returnData[template][location] = [];
+				}
+			} else {
+				returnData[template][location] = [];
+			}
+		});
+	});
+
+	return returnData;
+};
+
+widgets.getArea = async function (template, location) {
+	const result = await db.getObjectField(`widgets:${template}`, location);
+	if (!result) {
+		return [];
+	}
+	return parseWidgetData(result);
+};
+
+function parseWidgetData(data) {
+	const widgets = JSON.parse(data);
+	widgets.forEach((widget) => {
+		if (widget) {
+			widget.data.groups = widget.data.groups || [];
+			if (widget.data.groups && !Array.isArray(widget.data.groups)) {
+				widget.data.groups = [widget.data.groups];
+			}
+
+			widget.data.groupsHideFrom = widget.data.groupsHideFrom || [];
+			if (widget.data.groupsHideFrom && !Array.isArray(widget.data.groupsHideFrom)) {
+				widget.data.groupsHideFrom = [widget.data.groupsHideFrom];
+			}
+		}
+	});
+	return widgets;
+}
+
+widgets.setArea = async function (area) {
+	if (!area.location || !area.template) {
+		throw new Error('Missing location and template data');
+	}
+
+	await db.setObjectField(`widgets:${area.template}`, area.location, JSON.stringify(area.widgets));
+};
+
+widgets.reset = async function () {
+	const defaultAreas = [
 		{ name: 'Draft Zone', template: 'global', location: 'header' },
 		{ name: 'Draft Zone', template: 'global', location: 'footer' },
 		{ name: 'Draft Zone', template: 'global', location: 'sidebar' },
 	];
-	var drafts;
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				areas: function (next) {
-					plugins.fireHook('filter:widgets.getAreas', defaultAreas, next);
-				},
-				drafts: function (next) {
-					widgets.getArea('global', 'drafts', next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			drafts = results.drafts || [];
 
-			async.eachSeries(results.areas, function (area, next) {
-				async.waterfall([
-					function (next) {
-						widgets.getArea(area.template, area.location, next);
-					},
-					function (areaData, next) {
-						drafts = drafts.concat(areaData);
-						area.widgets = [];
-						widgets.setArea(area, next);
-					},
-				], next);
-			}, next);
-		},
-		function (next) {
-			widgets.setArea({
-				template: 'global',
-				location: 'drafts',
-				widgets: drafts,
-			}, next);
-		},
-	], callback);
+	const [areas, drafts] = await Promise.all([
+		plugins.hooks.fire('filter:widgets.getAreas', defaultAreas),
+		widgets.getArea('global', 'drafts'),
+	]);
+
+	let saveDrafts = drafts || [];
+	for (const area of areas) {
+		/* eslint-disable no-await-in-loop */
+		const areaData = await widgets.getArea(area.template, area.location);
+		saveDrafts = saveDrafts.concat(areaData);
+		area.widgets = [];
+		await widgets.setArea(area);
+	}
+
+	await widgets.setArea({
+		template: 'global',
+		location: 'drafts',
+		widgets: saveDrafts,
+	});
 };
 
-widgets.resetTemplate = function (template, callback) {
-	var toBeDrafted = [];
-	async.waterfall([
-		function (next) {
-			db.getObject('widgets:' + template + '.tpl', next);
-		},
-		function (area, next) {
-			for (var location in area) {
-				if (area.hasOwnProperty(location)) {
-					toBeDrafted = toBeDrafted.concat(JSON.parse(area[location]));
-				}
-			}
-			db.delete('widgets:' + template + '.tpl', next);
-		},
-		function (next) {
-			db.getObjectField('widgets:global', 'drafts', next);
-		},
-		function (draftWidgets, next) {
-			draftWidgets = JSON.parse(draftWidgets).concat(toBeDrafted);
-			db.setObjectField('widgets:global', 'drafts', JSON.stringify(draftWidgets), next);
-		},
-	], callback);
+widgets.resetTemplate = async function (template) {
+	const area = await db.getObject(`widgets:${template}.tpl`);
+	const toBeDrafted = _.flatMap(Object.values(area), value => JSON.parse(value));
+	await db.delete(`widgets:${template}.tpl`);
+	let draftWidgets = await db.getObjectField('widgets:global', 'drafts');
+	draftWidgets = JSON.parse(draftWidgets).concat(toBeDrafted);
+	await db.setObjectField('widgets:global', 'drafts', JSON.stringify(draftWidgets));
 };
 
-widgets.resetTemplates = function (templates, callback) {
-	async.eachSeries(templates, widgets.resetTemplate, callback);
+widgets.resetTemplates = async function (templates) {
+	for (const template of templates) {
+		/* eslint-disable no-await-in-loop */
+		await widgets.resetTemplate(template);
+	}
 };
 
-module.exports = widgets;
+require('../promisify')(widgets);

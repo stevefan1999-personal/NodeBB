@@ -1,12 +1,16 @@
 'use strict';
 
 
-var app = window.app || {};
-var socket;
-app.isConnected = false;
+app = window.app || {};
+socket = window.socket;
 
 (function () {
 	var reconnecting = false;
+
+	var hooks;
+	require(['hooks'], function (_hooks) {
+		hooks = _hooks;
+	});
 
 	var ioParams = {
 		reconnectionAttempts: config.maxReconnectionAttempts,
@@ -17,26 +21,71 @@ app.isConnected = false;
 
 	socket = io(config.websocketAddress, ioParams);
 
+	var oEmit = socket.emit;
+	socket.emit = function (event, data, callback) {
+		if (typeof data === 'function') {
+			callback = data;
+			data = null;
+		}
+		if (typeof callback === 'function') {
+			oEmit.apply(socket, [event, data, callback]);
+			return;
+		}
+
+		return new Promise(function (resolve, reject) {
+			oEmit.apply(socket, [event, data, function (err, result) {
+				if (err) reject(err);
+				else resolve(result);
+			}]);
+		});
+	};
+
 	if (parseInt(app.user.uid, 10) >= 0) {
 		addHandlers();
 	}
 
+	window.app.reconnect = () => {
+		if (socket.connected) {
+			return;
+		}
+
+		var reconnectEl = $('#reconnect');
+		$('#reconnect-alert')
+			.removeClass('alert-danger pointer')
+			.addClass('alert-warning')
+			.find('p')
+			.translateText(`[[global:reconnecting-message, ${config.siteTitle}]]`);
+
+		reconnectEl.html('<i class="fa fa-spinner fa-spin"></i>');
+		socket.connect();
+	};
+
 	function addHandlers() {
 		socket.on('connect', onConnect);
 
-		socket.on('reconnecting', onReconnecting);
-
 		socket.on('disconnect', onDisconnect);
 
-		socket.on('reconnect_failed', function () {
-			// Wait ten times the reconnection delay and then start over
-			setTimeout(socket.connect.bind(socket), parseInt(config.reconnectionDelay, 10) * 10);
+		socket.io.on('reconnect_failed', function () {
+			var reconnectEl = $('#reconnect');
+			reconnectEl.html('<i class="fa fa-plug text-danger"></i>');
+
+			$('#reconnect-alert')
+				.removeClass('alert-warning')
+				.addClass('alert-danger pointer')
+				.find('p')
+				.translateText('[[error:socket-reconnect-failed]]')
+				.one('click', app.reconnect);
+
+			$(window).one('focus', app.reconnect);
 		});
 
 		socket.on('checkSession', function (uid) {
 			if (parseInt(uid, 10) !== parseInt(app.user.uid, 10)) {
-				app.handleInvalidSession();
+				app.handleSessionMismatch();
 			}
+		});
+		socket.on('event:invalid_session', () => {
+			app.handleInvalidSession();
 		});
 
 		socket.on('setHostname', function (hostname) {
@@ -44,16 +93,43 @@ app.isConnected = false;
 		});
 
 		socket.on('event:banned', onEventBanned);
+		socket.on('event:unbanned', onEventUnbanned);
+		socket.on('event:logout', function () {
+			app.logout();
+		});
+		socket.on('event:alert', function (params) {
+			app.alert(params);
+		});
+		socket.on('event:deprecated_call', function (data) {
+			console.warn('[socket.io] ', data.eventName, 'is now deprecated in favour of', data.replacement);
+		});
 
-		socket.on('event:alert', app.alert);
+		socket.removeAllListeners('event:nodebb.ready');
+		socket.on('event:nodebb.ready', function (data) {
+			if ((data.hostname === app.upstreamHost) && (!app.cacheBuster || app.cacheBuster !== data['cache-buster'])) {
+				app.cacheBuster = data['cache-buster'];
+
+				app.alert({
+					alert_id: 'forum_updated',
+					title: '[[global:updated.title]]',
+					message: '[[global:updated.message]]',
+					clickfn: function () {
+						window.location.reload();
+					},
+					type: 'warning',
+				});
+			}
+		});
+		socket.on('event:livereload', function () {
+			if (app.user.isAdmin && !ajaxify.currentPage.match(/admin/)) {
+				window.location.reload();
+			}
+		});
 	}
 
 	function onConnect() {
-		app.isConnected = true;
-
 		if (!reconnecting) {
-			app.showMessages();
-			$(window).trigger('action:connected');
+			hooks.fire('action:connected');
 		}
 
 		if (reconnecting) {
@@ -61,15 +137,15 @@ app.isConnected = false;
 			var reconnectAlert = $('#reconnect-alert');
 
 			reconnectEl.tooltip('destroy');
-			reconnectEl.html('<i class="fa fa-check"></i>');
-			reconnectAlert.fadeOut(500);
+			reconnectEl.html('<i class="fa fa-check text-success"></i>');
+			reconnectAlert.addClass('hide');
 			reconnecting = false;
 
 			reJoinCurrentRoom();
 
 			socket.emit('meta.reconnected');
 
-			$(window).trigger('action:reconnected');
+			hooks.fire('action:reconnected');
 
 			setTimeout(function () {
 				reconnectEl.removeClass('active').addClass('hide');
@@ -82,30 +158,30 @@ app.isConnected = false;
 		var room;
 
 		switch (url_parts[0]) {
-		case 'user':
-			room = 'user/' + (ajaxify.data ? ajaxify.data.theirid : 0);
-			break;
-		case 'topic':
-			room = 'topic_' + url_parts[1];
-			break;
-		case 'category':
-			room = 'category_' + url_parts[1];
-			break;
-		case 'recent':
-			room = 'recent_topics';
-			break;
-		case 'unread':
-			room = 'unread_topics';
-			break;
-		case 'popular':
-			room = 'popular_topics';
-			break;
-		case 'admin':
-			room = 'admin';
-			break;
-		case 'categories':
-			room = 'categories';
-			break;
+			case 'user':
+				room = 'user/' + (ajaxify.data ? ajaxify.data.theirid : 0);
+				break;
+			case 'topic':
+				room = 'topic_' + url_parts[1];
+				break;
+			case 'category':
+				room = 'category_' + url_parts[1];
+				break;
+			case 'recent':
+				room = 'recent_topics';
+				break;
+			case 'unread':
+				room = 'unread_topics';
+				break;
+			case 'popular':
+				room = 'popular_topics';
+				break;
+			case 'admin':
+				room = 'admin';
+				break;
+			case 'categories':
+				room = 'categories';
+				break;
 		}
 		app.currentRoom = '';
 		app.enterRoom(room);
@@ -118,7 +194,7 @@ app.isConnected = false;
 
 		if (!reconnectEl.hasClass('active')) {
 			reconnectEl.html('<i class="fa fa-spinner fa-spin"></i>');
-			reconnectAlert.fadeIn(500).removeClass('hide');
+			reconnectAlert.removeClass('hide');
 		}
 
 		reconnectEl.addClass('active').removeClass('hide').tooltip({
@@ -127,12 +203,17 @@ app.isConnected = false;
 	}
 
 	function onDisconnect() {
-		$(window).trigger('action:disconnected');
-		app.isConnected = false;
+		setTimeout(function () {
+			if (socket.disconnected) {
+				onReconnecting();
+			}
+		}, 2000);
+
+		hooks.fire('action:disconnected');
 	}
 
 	function onEventBanned(data) {
-		var message = data.until ? '[[error:user-banned-reason-until, ' + $.timeago(data.until) + ', ' + data.reason + ']]' : '[[error:user-banned-reason, ' + data.reason + ']]';
+		var message = data.until ? '[[error:user-banned-reason-until, ' + utils.toISOString(data.until) + ', ' + data.reason + ']]' : '[[error:user-banned-reason, ' + data.reason + ']]';
 
 		bootbox.alert({
 			title: '[[error:user-banned]]',
@@ -142,5 +223,28 @@ app.isConnected = false;
 				window.location.href = config.relative_path + '/';
 			},
 		});
+	}
+
+	function onEventUnbanned() {
+		bootbox.alert({
+			title: '[[global:alert.unbanned]]',
+			message: '[[global:alert.unbanned.message]]',
+			closeButton: false,
+			callback: function () {
+				window.location.href = config.relative_path + '/';
+			},
+		});
+	}
+
+	if (
+		config.socketioOrigins &&
+		config.socketioOrigins !== '*:*' &&
+		config.socketioOrigins.indexOf(location.hostname) === -1
+	) {
+		console.error(
+			'You are accessing the forum from an unknown origin. This will likely result in websockets failing to connect. \n' +
+			'To fix this, set the `"url"` value in `config.json` to the URL at which you access the site. \n' +
+			'For more information, see this FAQ topic: https://community.nodebb.org/topic/13388'
+		);
 	}
 }());

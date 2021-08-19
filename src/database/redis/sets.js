@@ -1,89 +1,90 @@
 'use strict';
 
-module.exports = function (redisClient, module) {
-	var helpers = module.helpers.redis;
+module.exports = function (module) {
+	const helpers = require('./helpers');
 
-	module.setAdd = function (key, value, callback) {
-		callback = callback || function () {};
+	module.setAdd = async function (key, value) {
 		if (!Array.isArray(value)) {
 			value = [value];
 		}
 		if (!value.length) {
-			return callback();
+			return;
 		}
-		redisClient.sadd(key, value, function (err) {
-			callback(err);
-		});
+		await module.client.async.sadd(key, value);
 	};
 
-	module.setsAdd = function (keys, value, callback) {
-		callback = callback || function () {};
-		helpers.multiKeysValue(redisClient, 'sadd', keys, value, function (err) {
-			callback(err);
-		});
+	module.setsAdd = async function (keys, value) {
+		if (!Array.isArray(keys) || !keys.length) {
+			return;
+		}
+		const batch = module.client.batch();
+		keys.forEach(k => batch.sadd(String(k), String(value)));
+		await helpers.execBatch(batch);
 	};
 
-	module.setRemove = function (key, value, callback) {
-		callback = callback || function () {};
+	module.setRemove = async function (key, value) {
 		if (!Array.isArray(value)) {
 			value = [value];
 		}
 		if (!Array.isArray(key)) {
 			key = [key];
 		}
-		var multi = redisClient.multi();
-		key.forEach(function (key) {
-			multi.srem(key, value);
-		});
-		multi.exec(function (err) {
-			callback(err);
-		});
+		if (!value.length) {
+			return;
+		}
+
+		const batch = module.client.batch();
+		key.forEach(k => batch.srem(String(k), value));
+		await helpers.execBatch(batch);
 	};
 
-	module.setsRemove = function (keys, value, callback) {
-		callback = callback || function () {};
-		helpers.multiKeysValue(redisClient, 'srem', keys, value, function (err) {
-			callback(err);
-		});
+	module.setsRemove = async function (keys, value) {
+		const batch = module.client.batch();
+		keys.forEach(k => batch.srem(String(k), value));
+		await helpers.execBatch(batch);
 	};
 
-	module.isSetMember = function (key, value, callback) {
-		redisClient.sismember(key, value, function (err, result) {
-			callback(err, result === 1);
-		});
+	module.isSetMember = async function (key, value) {
+		const result = await module.client.async.sismember(key, value);
+		return result === 1;
 	};
 
-	module.isSetMembers = function (key, values, callback) {
-		helpers.multiKeyValues(redisClient, 'sismember', key, values, function (err, results) {
-			callback(err, results ? helpers.resultsToBool(results) : null);
-		});
+	module.isSetMembers = async function (key, values) {
+		const batch = module.client.batch();
+		values.forEach(v => batch.sismember(String(key), String(v)));
+		const results = await helpers.execBatch(batch);
+		return results ? helpers.resultsToBool(results) : null;
 	};
 
-	module.isMemberOfSets = function (sets, value, callback) {
-		helpers.multiKeysValue(redisClient, 'sismember', sets, value, function (err, results) {
-			callback(err, results ? helpers.resultsToBool(results) : null);
-		});
+	module.isMemberOfSets = async function (sets, value) {
+		const batch = module.client.batch();
+		sets.forEach(s => batch.sismember(String(s), String(value)));
+		const results = await helpers.execBatch(batch);
+		return results ? helpers.resultsToBool(results) : null;
 	};
 
-	module.getSetMembers = function (key, callback) {
-		redisClient.smembers(key, callback);
+	module.getSetMembers = async function (key) {
+		return await module.client.async.smembers(key);
 	};
 
-	module.getSetsMembers = function (keys, callback) {
-		helpers.multiKeys(redisClient, 'smembers', keys, callback);
+	module.getSetsMembers = async function (keys) {
+		const batch = module.client.batch();
+		keys.forEach(k => batch.smembers(String(k)));
+		return await helpers.execBatch(batch);
 	};
 
-	module.setCount = function (key, callback) {
-		redisClient.scard(key, callback);
+	module.setCount = async function (key) {
+		return await module.client.async.scard(key);
 	};
 
-	module.setsCount = function (keys, callback) {
-		helpers.multiKeys(redisClient, 'scard', keys, callback);
+	module.setsCount = async function (keys) {
+		const batch = module.client.batch();
+		keys.forEach(k => batch.scard(String(k)));
+		return await helpers.execBatch(batch);
 	};
 
-	module.setRemoveRandom = function (key, callback) {
-		callback = callback || function () {};
-		redisClient.spop(key, callback);
+	module.setRemoveRandom = async function (key) {
+		return await module.client.async.spop(key);
 	};
 
 	return module;

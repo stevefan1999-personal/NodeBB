@@ -1,169 +1,138 @@
 'use strict';
 
-var path = require('path');
-var async = require('async');
-var fs = require('fs');
-var mkdirp = require('mkdirp');
-var rimraf = require('rimraf');
-var _ = require('lodash');
+const _ = require('lodash');
+const nconf = require('nconf');
+const path = require('path');
+const fs = require('fs');
+const util = require('util');
+let mkdirp = require('mkdirp');
 
-var file = require('../file');
-var Plugins = require('../plugins');
+mkdirp = mkdirp.hasOwnProperty('native') ? mkdirp : util.promisify(mkdirp);
+const rimraf = require('rimraf');
 
-var buildLanguagesPath = path.join(__dirname, '../../build/public/language');
-var coreLanguagesPath = path.join(__dirname, '../../public/language');
+const rimrafAsync = util.promisify(rimraf);
 
-function getTranslationMetadata(callback) {
-	async.waterfall([
-		// generate list of languages and namespaces
-		function (next) {
-			file.walk(coreLanguagesPath, next);
-		},
-		function (paths, next) {
-			var languages = [];
-			var namespaces = [];
+const file = require('../file');
+const Plugins = require('../plugins');
+const { paths } = require('../constants');
 
-			paths.forEach(function (p) {
-				if (!p.endsWith('.json')) {
-					return;
-				}
+const buildLanguagesPath = path.join(paths.baseDir, 'build/public/language');
+const coreLanguagesPath = path.join(paths.baseDir, 'public/language');
 
-				var rel = path.relative(coreLanguagesPath, p).split(/[/\\]/);
-				var language = rel.shift().replace('_', '-').replace('@', '-x-');
-				var namespace = rel.join('/').replace(/\.json$/, '');
+async function getTranslationMetadata() {
+	const paths = await file.walk(coreLanguagesPath);
+	let languages = [];
+	let namespaces = [];
 
-				if (!language || !namespace) {
-					return;
-				}
+	paths.forEach((p) => {
+		if (!p.endsWith('.json')) {
+			return;
+		}
 
-				languages.push(language);
-				namespaces.push(namespace);
-			});
+		const rel = path.relative(coreLanguagesPath, p).split(/[/\\]/);
+		const language = rel.shift().replace('_', '-').replace('@', '-x-');
+		const namespace = rel.join('/').replace(/\.json$/, '');
 
-			next(null, {
-				languages: _.union(languages, Plugins.languageData.languages).sort().filter(Boolean),
-				namespaces: _.union(namespaces, Plugins.languageData.namespaces).sort().filter(Boolean),
-			});
-		},
+		if (!language || !namespace) {
+			return;
+		}
 
-		// save a list of languages to `${buildLanguagesPath}/metadata.json`
-		// avoids readdirs later on
-		function (ref, next) {
-			async.series([
-				function (next) {
-					mkdirp(buildLanguagesPath, next);
-				},
-				function (next) {
-					fs.writeFile(path.join(buildLanguagesPath, 'metadata.json'), JSON.stringify({
-						languages: ref.languages,
-						namespaces: ref.namespaces,
-					}), next);
-				},
-			], function (err) {
-				next(err, ref);
-			});
-		},
-	], callback);
+		languages.push(language);
+		namespaces.push(namespace);
+	});
+
+
+	languages = _.union(languages, Plugins.languageData.languages).sort().filter(Boolean);
+	namespaces = _.union(namespaces, Plugins.languageData.namespaces).sort().filter(Boolean);
+	const configLangs = nconf.get('languages');
+	if (process.env.NODE_ENV === 'development' && Array.isArray(configLangs) && configLangs.length) {
+		languages = configLangs;
+	}
+	// save a list of languages to `${buildLanguagesPath}/metadata.json`
+	// avoids readdirs later on
+	await mkdirp(buildLanguagesPath);
+	const result = {
+		languages: languages,
+		namespaces: namespaces,
+	};
+	await fs.promises.writeFile(path.join(buildLanguagesPath, 'metadata.json'), JSON.stringify(result));
+	return result;
 }
 
-function writeLanguageFile(language, namespace, translations, callback) {
-	var dev = global.env === 'development';
-	var filePath = path.join(buildLanguagesPath, language, namespace + '.json');
+async function writeLanguageFile(language, namespace, translations) {
+	const dev = process.env.NODE_ENV === 'development';
+	const filePath = path.join(buildLanguagesPath, language, `${namespace}.json`);
 
-	async.series([
-		async.apply(mkdirp, path.dirname(filePath)),
-		async.apply(fs.writeFile, filePath, JSON.stringify(translations, null, dev ? 2 : 0)),
-	], callback);
+	await mkdirp(path.dirname(filePath));
+	await fs.promises.writeFile(filePath, JSON.stringify(translations, null, dev ? 2 : 0));
 }
 
 // for each language and namespace combination,
 // run through core and all plugins to generate
 // a full translation hash
-function buildTranslations(ref, next) {
-	var namespaces = ref.namespaces;
-	var languages = ref.languages;
-	var plugins = _.values(Plugins.pluginsData).filter(function (plugin) {
-		return typeof plugin.languages === 'string';
+async function buildTranslations(ref) {
+	const { namespaces } = ref;
+	const { languages } = ref;
+	const plugins = _.values(Plugins.pluginsData).filter(plugin => typeof plugin.languages === 'string');
+
+	const promises = [];
+
+	namespaces.forEach((namespace) => {
+		languages.forEach((language) => {
+			promises.push(buildNamespaceLanguage(language, namespace, plugins));
+		});
 	});
 
-	async.each(namespaces, function (namespace, next) {
-		async.each(languages, function (lang, next) {
-			var translations = {};
-
-			async.series([
-				// core first
-				function (cb) {
-					fs.readFile(path.join(coreLanguagesPath, lang, namespace + '.json'), 'utf8', function (err, file) {
-						if (err) {
-							if (err.code === 'ENOENT') {
-								return cb();
-							}
-							return cb(err);
-						}
-
-						try {
-							Object.assign(translations, JSON.parse(file));
-							cb();
-						} catch (err) {
-							cb(err);
-						}
-					});
-				},
-				function (cb) {
-					// for each plugin, fallback in this order:
-					//  1. correct language string (en-GB)
-					//  2. old language string (en_GB)
-					//  3. corrected plugin defaultLang (en-US)
-					//  4. old plugin defaultLang (en_US)
-					async.each(plugins, function (pluginData, done) {
-						var pluginLanguages = path.join(__dirname, '../../node_modules/', pluginData.id, pluginData.languages);
-						var defaultLang = pluginData.defaultLang || 'en-GB';
-
-						async.eachSeries([
-							defaultLang.replace('-', '_').replace('-x-', '@'),
-							defaultLang.replace('_', '-').replace('@', '-x-'),
-							lang.replace('-', '_').replace('-x-', '@'),
-							lang,
-						], function (language, next) {
-							fs.readFile(path.join(pluginLanguages, language, namespace + '.json'), 'utf8', function (err, file) {
-								if (err) {
-									if (err.code === 'ENOENT') {
-										return next(null, false);
-									}
-									return next(err);
-								}
-
-								try {
-									Object.assign(translations, JSON.parse(file));
-									next(null, true);
-								} catch (err) {
-									next(err);
-								}
-							});
-						}, done);
-					}, function (err) {
-						if (err) {
-							return cb(err);
-						}
-
-						if (Object.keys(translations).length) {
-							writeLanguageFile(lang, namespace, translations, cb);
-							return;
-						}
-						cb();
-					});
-				},
-			], next);
-		}, next);
-	}, next);
+	await Promise.all(promises);
 }
 
-exports.build = function buildLanguages(callback) {
-	async.waterfall([
-		function (next) {
-			rimraf(buildLanguagesPath, next);
-		},
-		getTranslationMetadata,
-		buildTranslations,
-	], callback);
+async function buildNamespaceLanguage(lang, namespace, plugins) {
+	const translations = {};
+	// core first
+	await assignFileToTranslations(translations, path.join(coreLanguagesPath, lang, `${namespace}.json`));
+
+	await Promise.all(plugins.map(pluginData => addPlugin(translations, pluginData, lang, namespace)));
+
+	if (Object.keys(translations).length) {
+		await writeLanguageFile(lang, namespace, translations);
+	}
+}
+
+async function addPlugin(translations, pluginData, lang, namespace) {
+	const pluginLanguages = path.join(paths.nodeModules, pluginData.id, pluginData.languages);
+	const defaultLang = pluginData.defaultLang || 'en-GB';
+
+	// for each plugin, fallback in this order:
+	//  1. correct language string (en-GB)
+	//  2. old language string (en_GB)
+	//  3. corrected plugin defaultLang (en-US)
+	//  4. old plugin defaultLang (en_US)
+	const langs = _.uniq([
+		defaultLang.replace('-', '_').replace('-x-', '@'),
+		defaultLang.replace('_', '-').replace('@', '-x-'),
+		lang.replace('-', '_').replace('-x-', '@'),
+		lang,
+	]);
+
+	for (const language of langs) {
+		/* eslint-disable no-await-in-loop */
+		await assignFileToTranslations(translations, path.join(pluginLanguages, language, `${namespace}.json`));
+	}
+}
+
+async function assignFileToTranslations(translations, path) {
+	try {
+		const fileData = await fs.promises.readFile(path, 'utf8');
+		Object.assign(translations, JSON.parse(fileData));
+	} catch (err) {
+		if (err.code !== 'ENOENT') {
+			throw err;
+		}
+	}
+}
+
+exports.build = async function buildLanguages() {
+	await rimrafAsync(buildLanguagesPath);
+	const data = await getTranslationMetadata();
+	await buildTranslations(data);
 };

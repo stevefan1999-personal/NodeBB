@@ -1,4 +1,5 @@
 {
+	"trending": "Trending",
 	"installed": "Nainštalované",
 	"active": "Aktívny",
 	"inactive": "Nečinný",
@@ -9,6 +10,7 @@
 
 	"plugin-search": "Hľadať rozšírenia",
 	"plugin-search-placeholder": "Hľadať rozšírenia...",
+	"submit-anonymous-usage": "Submit anonymous plugin usage data.",
 	"reorder-plugins": "Roztriediť rozšírenia",
 	"order-active": "Poradie aktívnych rozšírení",
 	"dev-interested": "Zaujíma Vás písanie rozšírení pre NodeBB?",
@@ -29,13 +31,15 @@
 	"plugin-item.more-info": "Pre viac informácií:",
 	"plugin-item.unknown": "Neznámi",
 	"plugin-item.unknown-explanation": "Stav tohto rozšírenia nemohol byť zistený, možno vďaka chybe v konfigurácii.",
+	"plugin-item.compatible": "This plugin works on NodeBB %1",
+	"plugin-item.not-compatible": "This plugin has no compatibility data, make sure it works before installing on your production environment.",
 
 	"alert.enabled": "Doplnky povolené",
 	"alert.disabled": "Rozšírenia zakázané",
 	"alert.upgraded": "Rozšírenie bolo aktualizované",
 	"alert.installed": "Rozšírenie bolo nainštalované",
 	"alert.uninstalled": "Rozšírenie bolo odinštalované",
-	"alert.activate-success": "Pre úplnú aktiváciu tohto rozšírenia, reštartujte NodeBB",
+	"alert.activate-success": "Please rebuild and restart your NodeBB to fully activate this plugin",
 	"alert.deactivate-success": "Rozšírenie bolo úspešne deaktivované",
 	"alert.upgrade-success": "Pre úplnú aktualizáciu tohto rozšírenia, znovu zostavte a reštartujte NodeBB.",
 	"alert.install-success": "Rozšírenie bolo úspešne nainštalované, môžete ho aktivovať.",

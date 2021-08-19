@@ -1,41 +1,75 @@
 'use strict';
 
-
-define('admin/manage/categories', ['vendor/jquery/serializeObject/jquery.ba-serializeobject.min', 'translator', 'benchpress'], function (serialize, translator, Benchpress) {
+define('admin/manage/categories', [
+	'translator',
+	'benchpress',
+	'categorySelector',
+	'api',
+	'Sortable',
+	'bootbox',
+], function (translator, Benchpress, categorySelector, api, Sortable, bootbox) {
 	var	Categories = {};
 	var newCategoryId = -1;
 	var sortables;
 
 	Categories.init = function () {
-		socket.emit('admin.categories.getAll', function (error, payload) {
-			if (error) {
-				return app.alertError(error.message);
-			}
-
-			Categories.render(payload);
+		categorySelector.init($('.category [component="category-selector"]'), {
+			parentCid: ajaxify.data.selectedCategory ? ajaxify.data.selectedCategory.cid : 0,
+			onSelect: function (selectedCategory) {
+				ajaxify.go('/admin/manage/categories' + (selectedCategory.cid ? '?cid=' + selectedCategory.cid : ''));
+			},
+			localCategories: [],
 		});
+		Categories.render(ajaxify.data.categoriesTree);
 
 		$('button[data-action="create"]').on('click', Categories.throwCreateModal);
 
 		// Enable/Disable toggle events
-		$('.categories').on('click', 'button[data-action="toggle"]', function () {
+		$('.categories').on('click', '.category-tools [data-action="toggle"]', function () {
 			var $this = $(this);
-			var cid = $this.attr('data-cid');
+			var cid = $this.attr('data-disable-cid');
 			var parentEl = $this.parents('li[data-cid="' + cid + '"]');
 			var disabled = parentEl.hasClass('disabled');
-
-			var children = parentEl.find('li[data-cid]').map(function () {
+			var childrenEls = parentEl.find('li[data-cid]');
+			var childrenCids = childrenEls.map(function () {
 				return $(this).attr('data-cid');
 			}).get();
 
-			Categories.toggle([cid].concat(children), !disabled);
-			return false;
+			Categories.toggle([cid].concat(childrenCids), !disabled);
 		});
 
 		$('.categories').on('click', '.toggle', function () {
 			var el = $(this);
 			el.find('i').toggleClass('fa-minus').toggleClass('fa-plus');
 			el.closest('[data-cid]').find('> ul[data-cid]').toggleClass('hidden');
+		});
+
+		$('.categories').on('click', '.set-order', function () {
+			var cid = $(this).attr('data-cid');
+			var order = $(this).attr('data-order');
+			var modal = bootbox.dialog({
+				title: '[[admin/manage/categories:set-order]]',
+				message: '<input type="number" min="1" class="form-control input-lg" value=' + order + ' /><p class="help-block">[[admin/manage/categories:set-order-help]]</p>',
+				show: true,
+				buttons: {
+					save: {
+						label: '[[modules:bootbox.confirm]]',
+						className: 'btn-primary',
+						callback: function () {
+							var val = modal.find('input').val();
+							if (val && cid) {
+								var modified = {};
+								modified[cid] = { order: Math.max(1, parseInt(val, 10)) };
+								api.put('/categories/' + cid, modified[cid]).then(function () {
+									ajaxify.refresh();
+								}).catch(err => app.alertError(err));
+							} else {
+								return false;
+							}
+						},
+					},
+				},
+			});
 		});
 
 		$('#collapse-all').on('click', function () {
@@ -54,56 +88,60 @@ define('admin/manage/categories', ['vendor/jquery/serializeObject/jquery.ba-seri
 	};
 
 	Categories.throwCreateModal = function () {
-		socket.emit('admin.categories.getNames', {}, function (err, categories) {
-			if (err) {
-				return app.alertError(err.message);
+		Benchpress.render('admin/partials/categories/create', {}).then(function (html) {
+			var modal = bootbox.dialog({
+				title: '[[admin/manage/categories:alert.create]]',
+				message: html,
+				buttons: {
+					save: {
+						label: '[[global:save]]',
+						className: 'btn-primary',
+						callback: submit,
+					},
+				},
+			});
+			var options = {
+				localCategories: [
+					{
+						cid: 0,
+						name: '[[admin/manage/categories:parent-category-none]]',
+						icon: 'fa-none',
+					},
+				],
+			};
+			var parentSelector = categorySelector.init(modal.find('#parentCidGroup [component="category-selector"]'), options);
+			var cloneFromSelector = categorySelector.init(modal.find('#cloneFromCidGroup [component="category-selector"]'), options);
+			function submit() {
+				var formData = modal.find('form').serializeObject();
+				formData.description = '';
+				formData.icon = 'fa-comments';
+				formData.uid = app.user.uid;
+				formData.parentCid = parentSelector.getSelectedCid();
+				formData.cloneFromCid = cloneFromSelector.getSelectedCid();
+
+				Categories.create(formData);
+				modal.modal('hide');
+				return false;
 			}
 
-			Benchpress.parse('admin/partials/categories/create', {
-				categories: categories,
-			}, function (html) {
-				var modal = bootbox.dialog({
-					title: '[[admin/manage/categories:alert.create]]',
-					message: html,
-					buttons: {
-						save: {
-							label: '[[global:save]]',
-							className: 'btn-primary',
-							callback: submit,
-						},
-					},
-				});
+			$('#cloneChildren').on('change', function () {
+				var check = $(this);
+				var parentSelect = modal.find('#parentCidGroup [component="category-selector"] .dropdown-toggle');
 
-				function submit() {
-					var formData = modal.find('form').serializeObject();
-					formData.description = '';
-					formData.icon = 'fa-comments';
-					formData.uid = app.user.uid;
-
-					Categories.create(formData);
-					modal.modal('hide');
-					return false;
+				if (check.prop('checked')) {
+					parentSelect.attr('disabled', 'disabled');
+					parentSelector.selectCategory(0);
+				} else {
+					parentSelect.removeAttr('disabled');
 				}
-
-				$('#cloneChildren').on('change', function () {
-					var check = $(this);
-					var parentSelect = $('#parentCid');
-
-					if (check.prop('checked')) {
-						parentSelect.attr('disabled', 'disabled');
-						parentSelect.val('');
-					} else {
-						parentSelect.removeAttr('disabled');
-					}
-				});
-
-				modal.find('form').on('submit', submit);
 			});
+
+			modal.find('form').on('submit', submit);
 		});
 	};
 
 	Categories.create = function (payload) {
-		socket.emit('admin.categories.create', payload, function (err, data) {
+		api.post('/categories', payload, function (err, data) {
 			if (err) {
 				return app.alertError(err.message);
 			}
@@ -137,20 +175,14 @@ define('admin/manage/categories', ['vendor/jquery/serializeObject/jquery.ba-seri
 	};
 
 	Categories.toggle = function (cids, disabled) {
-		var payload = {};
-
-		cids.forEach(function (cid) {
-			payload[cid] = {
-				disabled: disabled ? 1 : 0,
-			};
-		});
-
-		socket.emit('admin.categories.update', payload, function (err) {
-			if (err) {
-				return app.alertError(err.message);
-			}
-			ajaxify.refresh();
-		});
+		const listEl = document.querySelector('.categories ul');
+		Promise.all(cids.map(cid => api.put('/categories/' + cid, {
+			disabled: disabled ? 1 : 0,
+		}).then(() => {
+			const categoryEl = listEl.querySelector(`li[data-cid="${cid}"]`);
+			categoryEl.classList[disabled ? 'add' : 'remove']('disabled');
+			$(categoryEl).find('li a[data-action="toggle"]').first().translateText(disabled ? '[[admin/manage/categories:enable]]' : '[[admin/manage/categories:disable]]');
+		}).catch(app.alertError)));
 	};
 
 	function itemDidAdd(e) {
@@ -162,24 +194,21 @@ define('admin/manage/categories', ['vendor/jquery/serializeObject/jquery.ba-seri
 
 		// Update needed?
 		if ((e.newIndex != null && parseInt(e.oldIndex, 10) !== parseInt(e.newIndex, 10)) || isCategoryUpdate) {
-			var parentCategory = isCategoryUpdate ? sortables[newCategoryId] : sortables[e.from.dataset.cid];
+			var cid = e.item.dataset.cid;
 			var modified = {};
-			var i = 0;
-			var list = parentCategory.toArray();
-			var len = list.length;
-
-			for (i; i < len; i += 1) {
-				modified[list[i]] = {
-					order: (i + 1),
-				};
-			}
+			// on page 1 baseIndex is 0, on page n baseIndex is (n - 1) * ajaxify.data.categoriesPerPage
+			// this makes sure order is correct when drag & drop is used on pages > 1
+			var baseIndex = (ajaxify.data.pagination.currentPage - 1) * ajaxify.data.categoriesPerPage;
+			modified[cid] = {
+				order: baseIndex + e.newIndex + 1,
+			};
 
 			if (isCategoryUpdate) {
-				modified[e.item.dataset.cid].parentCid = newCategoryId;
+				modified[cid].parentCid = newCategoryId;
 			}
 
 			newCategoryId = -1;
-			socket.emit('admin.categories.update', modified);
+			api.put('/categories/' + cid, modified[cid]);
 		}
 	}
 
@@ -212,28 +241,26 @@ define('admin/manage/categories', ['vendor/jquery/serializeObject/jquery.ba-seri
 		}
 
 		function continueRender() {
-			Benchpress.parse('admin/partials/categories/category-rows', {
+			app.parseAndTranslate('admin/partials/categories/category-rows', {
 				cid: parentId,
 				categories: categories,
 			}, function (html) {
-				translator.translate(html, function (html) {
-					container.append(html);
+				container.append(html);
 
-					// Handle and children categories in this level have
-					for (var x = 0, numCategories = categories.length; x < numCategories; x += 1) {
-						renderList(categories[x].children, $('li[data-cid="' + categories[x].cid + '"]'), categories[x].cid);
-					}
+				// Handle and children categories in this level have
+				for (var x = 0, numCategories = categories.length; x < numCategories; x += 1) {
+					renderList(categories[x].children, $('li[data-cid="' + categories[x].cid + '"]'), categories[x].cid);
+				}
 
-					// Make list sortable
-					sortables[parentId] = Sortable.create($('ul[data-cid="' + parentId + '"]')[0], {
-						group: 'cross-categories',
-						animation: 150,
-						handle: '.icon',
-						dataIdAttr: 'data-cid',
-						ghostClass: 'placeholder',
-						onAdd: itemDidAdd,
-						onEnd: itemDragDidEnd,
-					});
+				// Make list sortable
+				sortables[parentId] = Sortable.create($('ul[data-cid="' + parentId + '"]')[0], {
+					group: 'cross-categories',
+					animation: 150,
+					handle: '.information',
+					dataIdAttr: 'data-cid',
+					ghostClass: 'placeholder',
+					onAdd: itemDidAdd,
+					onEnd: itemDragDidEnd,
 				});
 			});
 		}

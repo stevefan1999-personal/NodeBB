@@ -1,155 +1,134 @@
 'use strict';
 
-var async = require('async');
-var nconf = require('nconf');
-var validator = require('validator');
-var winston = require('winston');
+const nconf = require('nconf');
+const validator = require('validator');
 
-var plugins = require('../plugins');
-var translator = require('../translator');
-var widgets = require('../widgets');
-var utils = require('../utils');
+
+const plugins = require('../plugins');
+const meta = require('../meta');
+const translator = require('../translator');
+const widgets = require('../widgets');
+const utils = require('../utils');
+const helpers = require('./helpers');
+
+const relative_path = nconf.get('relative_path');
 
 module.exports = function (middleware) {
-	middleware.processRender = function (req, res, next) {
+	middleware.processRender = function processRender(req, res, next) {
 		// res.render post-processing, modified from here: https://gist.github.com/mrlannigan/5051687
-		var render = res.render;
-		res.render = function (template, options, fn) {
-			var self = this;
-			var req = this.req;
-			var defaultFn = function (err, str) {
-				if (err) {
-					return next(err);
+		const { render } = res;
+
+		res.render = async function renderOverride(template, options, fn) {
+			const self = this;
+			const { req } = this;
+			async function renderMethod(template, options, fn) {
+				options = options || {};
+				if (typeof options === 'function') {
+					fn = options;
+					options = {};
 				}
-				self.send(str);
-			};
 
-			options = options || {};
-			if (typeof options === 'function') {
-				fn = options;
-				options = {};
-			}
-			if (typeof fn !== 'function') {
-				fn = defaultFn;
-			}
+				options.loggedIn = req.uid > 0;
+				options.relative_path = relative_path;
+				options.template = { name: template, [template]: true };
+				options.url = (req.baseUrl + req.path.replace(/^\/api/, ''));
+				options.bodyClass = helpers.buildBodyClass(req, res, options);
 
-			var ajaxifyData;
-			var templateToRender;
-			async.waterfall([
-				function (next) {
-					options.loggedIn = !!req.uid;
-					options.relative_path = nconf.get('relative_path');
-					options.template = { name: template };
-					options.template[template] = true;
-					options.url = (req.baseUrl + req.path.replace(/^\/api/, ''));
-					options.bodyClass = buildBodyClass(req, res, options);
-					plugins.fireHook('filter:' + template + '.build', { req: req, res: res, templateData: options }, next);
-				},
-				function (data, next) {
-					templateToRender = data.templateData.templateToRender || template;
-					plugins.fireHook('filter:middleware.render', { req: req, res: res, templateData: data.templateData }, next);
-				},
-				function (data, next) {
-					options = data.templateData;
+				const buildResult = await plugins.hooks.fire(`filter:${template}.build`, { req: req, res: res, templateData: options });
+				if (res.headersSent) {
+					return;
+				}
+				const templateToRender = buildResult.templateData.templateToRender || template;
 
-					widgets.render(req.uid, {
-						template: template + '.tpl',
-						url: options.url,
-						templateData: options,
-						req: req,
-						res: res,
-					}, next);
-				},
-				function (data, next) {
-					options.widgets = data;
+				const renderResult = await plugins.hooks.fire('filter:middleware.render', { req: req, res: res, templateData: buildResult.templateData });
+				if (res.headersSent) {
+					return;
+				}
+				options = renderResult.templateData;
+				options._header = {
+					tags: await meta.tags.parse(req, renderResult, res.locals.metaTags, res.locals.linkTags),
+				};
+				options.widgets = await widgets.render(req.uid, {
+					template: `${template}.tpl`,
+					url: options.url,
+					templateData: options,
+					req: req,
+					res: res,
+				});
+				res.locals.template = template;
+				options._locals = undefined;
 
-					res.locals.template = template;
-					options._locals = undefined;
-
-					if (res.locals.isAPI) {
-						if (req.route && req.route.path === '/api/') {
-							options.title = '[[pages:home]]';
-						}
-						req.app.set('json spaces', global.env === 'development' || req.query.pretty ? 4 : 0);
-						return res.json(options);
+				if (res.locals.isAPI) {
+					if (req.route && req.route.path === '/api/') {
+						options.title = '[[pages:home]]';
 					}
+					req.app.set('json spaces', global.env === 'development' || req.query.pretty ? 4 : 0);
+					return res.json(options);
+				}
 
-					ajaxifyData = JSON.stringify(options).replace(/<\//g, '<\\/');
+				const results = await utils.promiseParallel({
+					header: renderHeaderFooter('renderHeader', req, res, options),
+					content: renderContent(render, templateToRender, req, res, options),
+					footer: renderHeaderFooter('renderFooter', req, res, options),
+				});
 
-					async.parallel({
-						header: function (next) {
-							renderHeaderFooter('renderHeader', req, res, options, next);
-						},
-						content: function (next) {
-							render.call(self, templateToRender, options, next);
-						},
-						footer: function (next) {
-							renderHeaderFooter('renderFooter', req, res, options, next);
-						},
-					}, next);
-				},
-				function (results, next) {
-					var str = results.header +
-						(res.locals.postHeader || '') +
-						results.content + '<script id="ajaxify-data"></script>' +
-						(res.locals.preFooter || '') +
-						results.footer;
+				const str = `${results.header +
+					(res.locals.postHeader || '') +
+					results.content
+				}<script id="ajaxify-data" type="application/json">${
+					JSON.stringify(options).replace(/<\//g, '<\\/')
+				}</script>${
+					res.locals.preFooter || ''
+				}${results.footer}`;
 
-					translate(str, req, res, next);
-				},
-				function (translated, next) {
-					translated = translated.replace('<script id="ajaxify-data"></script>', function () {
-						return '<script id="ajaxify-data" type="application/json">' + ajaxifyData + '</script>';
-					});
-					next(null, translated);
-				},
-			], fn);
+				if (typeof fn !== 'function') {
+					self.send(str);
+				} else {
+					fn(null, str);
+				}
+			}
+
+			try {
+				await renderMethod(template, options, fn);
+			} catch (err) {
+				next(err);
+			}
 		};
 
 		next();
 	};
 
-	function renderHeaderFooter(method, req, res, options, next) {
-		if (res.locals.renderHeader) {
-			middleware[method](req, res, options, next);
-		} else if (res.locals.renderAdminHeader) {
-			middleware.admin[method](req, res, options, next);
-		} else {
-			next(null, '');
-		}
+	async function renderContent(render, tpl, req, res, options) {
+		return new Promise((resolve, reject) => {
+			render.call(res, tpl, options, async (err, str) => {
+				if (err) reject(err);
+				else resolve(await translate(str, getLang(req, res)));
+			});
+		});
 	}
 
-	function translate(str, req, res, next) {
-		var language = (res.locals.config && res.locals.config.userLang) || 'en-GB';
+	async function renderHeaderFooter(method, req, res, options) {
+		let str = '';
+		if (res.locals.renderHeader) {
+			str = await middleware[method](req, res, options);
+		} else if (res.locals.renderAdminHeader) {
+			str = await middleware.admin[method](req, res, options);
+		} else {
+			str = '';
+		}
+		return await translate(str, getLang(req, res));
+	}
+
+	function getLang(req, res) {
+		let language = (res.locals.config && res.locals.config.userLang) || 'en-GB';
 		if (res.locals.renderAdminHeader) {
 			language = (res.locals.config && res.locals.config.acpLang) || 'en-GB';
 		}
-		language = req.query.lang ? validator.escape(String(req.query.lang)) : language;
-		translator.translate(str, language, function (translated) {
-			next(null, translator.unescape(translated));
-		});
+		return req.query.lang ? validator.escape(String(req.query.lang)) : language;
 	}
 
-	function buildBodyClass(req, res, templateData) {
-		var clean = req.path.replace(/^\/api/, '').replace(/^\/|\/$/g, '');
-		var parts = clean.split('/').slice(0, 3);
-		parts.forEach(function (p, index) {
-			try {
-				p = utils.slugify(decodeURIComponent(p));
-			} catch (err) {
-				winston.error(err);
-				p = '';
-			}
-			p = validator.escape(String(p));
-			parts[index] = index ? parts[0] + '-' + p : 'page-' + (p || 'home');
-		});
-
-		if (templateData.template.topic) {
-			parts.push('page-topic-category-' + templateData.category.cid);
-			parts.push('page-topic-category-' + utils.slugify(templateData.category.name));
-		}
-
-		parts.push('page-status-' + res.statusCode);
-		return parts.join(' ');
+	async function translate(str, language) {
+		const translated = await translator.translate(str, language);
+		return translator.unescape(translated);
 	}
 };

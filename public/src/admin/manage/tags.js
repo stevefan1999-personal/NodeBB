@@ -4,8 +4,7 @@
 define('admin/manage/tags', [
 	'forum/infinitescroll',
 	'admin/modules/selectable',
-	'admin/modules/colorpicker',
-], function (infinitescroll, selectable, colorpicker) {
+], function (infinitescroll, selectable) {
 	var	Tags = {};
 	var timeoutId = 0;
 
@@ -14,7 +13,6 @@ define('admin/manage/tags', [
 
 		handleCreate();
 		handleSearch();
-		handleModify();
 		handleRename();
 		handleDeleteSelected();
 	};
@@ -79,57 +77,7 @@ define('admin/manage/tags', [
 						selectable.enable('.tag-management', '.tag-row');
 					});
 				});
-			}, 100);
-		});
-	}
-
-	function handleModify() {
-		$('#modify').on('click', function () {
-			var tagsToModify = $('.tag-row.ui-selected');
-			if (!tagsToModify.length) {
-				return;
-			}
-
-			var firstTag = $(tagsToModify[0]);
-			var title = tagsToModify.length > 1 ? '[[admin/manage/tags:alerts.editing-multiple]]' : '[[admin/manage/tags:alerts.editing-x, ' + firstTag.find('.tag-item').attr('data-tag') + ']]';
-
-			var modal = bootbox.dialog({
-				title: title,
-				message: firstTag.find('.tag-modal').html(),
-				buttons: {
-					success: {
-						label: 'Save',
-						className: 'btn-primary save',
-						callback: function () {
-							var modal = $('.bootbox');
-							var bgColor = modal.find('[data-name="bgColor"]').val();
-							var color = modal.find('[data-name="color"]').val();
-							var data = [];
-							tagsToModify.each(function (idx, tag) {
-								tag = $(tag);
-								data.push({
-									value: tag.attr('data-tag'),
-									color: modal.find('[data-name="color"]').val(),
-									bgColor: modal.find('[data-name="bgColor"]').val(),
-								});
-
-								tag.find('[data-name="bgColor"]').val(bgColor);
-								tag.find('[data-name="color"]').val(color);
-								tag.find('.tag-item').css('background-color', bgColor).css('color', color);
-							});
-
-							socket.emit('admin.tags.update', data, function (err) {
-								if (err) {
-									return app.alertError(err.message);
-								}
-								app.alertSuccess('[[admin/manage/tags:alerts.update-success]]');
-							});
-						},
-					},
-				},
-			});
-
-			handleColorPickers(modal);
+			}, 250);
 		});
 	}
 
@@ -140,11 +88,8 @@ define('admin/manage/tags', [
 				return;
 			}
 
-			var firstTag = $(tagsToModify[0]);
-			var title = tagsToModify.length > 1 ? '[[admin/manage/tags:alerts.editing-multiple]]' : '[[admin/manage/tags:alerts.editing-x, ' + firstTag.find('.tag-item').attr('data-tag') + ']]';
-
 			var modal = bootbox.dialog({
-				title: title,
+				title: '[[admin/manage/tags:alerts.editing]]',
 				message: $('.rename-modal').html(),
 				buttons: {
 					success: {
@@ -165,6 +110,7 @@ define('admin/manage/tags', [
 									return app.alertError(err.message);
 								}
 								app.alertSuccess('[[admin/manage/tags:alerts.update-success]]');
+								ajaxify.refresh();
 							});
 						},
 					},
@@ -198,15 +144,6 @@ define('admin/manage/tags', [
 				});
 			});
 		});
-	}
-
-	function handleColorPickers(modal) {
-		function enableColorPicker(idx, inputEl) {
-			var $inputEl = $(inputEl);
-			colorpicker.enable($inputEl);
-		}
-
-		modal.find('[data-name="bgColor"], [data-name="color"]').each(enableColorPicker);
 	}
 
 	return Tags;

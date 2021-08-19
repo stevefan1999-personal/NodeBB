@@ -1,7 +1,7 @@
 'use strict';
 
 
-define('settings', function () {
+define('settings', ['hooks'], function (hooks) {
 	var DEFAULT_PLUGINS = [
 		'settings/checkbox',
 		'settings/number',
@@ -10,6 +10,7 @@ define('settings', function () {
 		'settings/array',
 		'settings/key',
 		'settings/object',
+		'settings/sorted-list',
 	];
 
 	var Settings;
@@ -271,6 +272,25 @@ define('settings', function () {
 				onReady.push(callback);
 			}
 		},
+		serializeForm: function (formEl) {
+			var values = formEl.serializeObject();
+
+			// "Fix" checkbox values, so that unchecked options are not omitted
+			formEl.find('input[type="checkbox"]').each(function (idx, inputEl) {
+				inputEl = $(inputEl);
+				if (!inputEl.is(':checked')) {
+					values[inputEl.attr('name')] = 'off';
+				}
+			});
+
+			// save multiple selects as json arrays
+			formEl.find('select[multiple]').each(function (idx, selectEl) {
+				selectEl = $(selectEl);
+				values[selectEl.attr('name')] = JSON.stringify(selectEl.val());
+			});
+
+			return values;
+		},
 		/**
 		 Persists the given settings with given hash.
 		 @param hash The hash to use as settings-id.
@@ -450,13 +470,14 @@ define('settings', function () {
 		},
 		load: function (hash, formEl, callback) {
 			callback = callback || function () {};
-			socket.emit('admin.settings.get', {
+			var call = formEl.attr('data-socket-get');
+
+			socket.emit(call || 'admin.settings.get', {
 				hash: hash,
 			}, function (err, values) {
 				if (err) {
 					return callback(err);
 				}
-
 				// multipe selects are saved as json arrays, parse them here
 				$(formEl).find('select[multiple]').each(function (idx, selectEl) {
 					var key = $(selectEl).attr('name');
@@ -470,13 +491,19 @@ define('settings', function () {
 				});
 
 				// Save loaded settings into ajaxify.data for use client-side
-				ajaxify.data.settings = values;
+				ajaxify.data[call ? hash : 'settings'] = values;
+
+				helper.whenReady(function () {
+					$(formEl).find('[data-sorted-list]').each(function (idx, el) {
+						getHook(el, 'get').call(Settings, $(el), hash);
+					});
+				});
 
 				$(formEl).deserialize(values);
 				$(formEl).find('input[type="checkbox"]').each(function () {
 					$(this).parents('.mdl-switch').toggleClass('is-checked', $(this).is(':checked'));
 				});
-				$(window).trigger('action:admin.settingsLoaded');
+				hooks.fire('action:admin.settingsLoaded');
 
 				// Handle unsaved changes
 				$(formEl).on('change', 'input, select, textarea', function () {
@@ -484,29 +511,36 @@ define('settings', function () {
 					app.flags._unsaved = true;
 				});
 
+				var saveEl = document.getElementById('save');
+				if (saveEl) {
+					require(['mousetrap'], function (mousetrap) {
+						mousetrap.bind('ctrl+s', function (ev) {
+							saveEl.click();
+							ev.preventDefault();
+						});
+					});
+				}
+
 				callback(null, values);
 			});
 		},
 		save: function (hash, formEl, callback) {
 			formEl = $(formEl);
-			if (formEl.length) {
-				var values = formEl.serializeObject();
 
-				// "Fix" checkbox values, so that unchecked options are not omitted
-				formEl.find('input[type="checkbox"]').each(function (idx, inputEl) {
-					inputEl = $(inputEl);
-					if (!inputEl.is(':checked')) {
-						values[inputEl.attr('name')] = 'off';
+			if (formEl.length) {
+				var values = helper.serializeForm(formEl);
+
+				helper.whenReady(function () {
+					var list = formEl.find('[data-sorted-list]');
+					if (list.length) {
+						list.each((idx, item) => {
+							getHook(item, 'set').call(Settings, $(item), values);
+						});
 					}
 				});
 
-				// save multiple selects as json arrays
-				formEl.find('select[multiple]').each(function (idx, selectEl) {
-					selectEl = $(selectEl);
-					values[selectEl.attr('name')] = JSON.stringify(selectEl.val());
-				});
-
-				socket.emit('admin.settings.set', {
+				var call = formEl.attr('data-socket-set');
+				socket.emit(call || 'admin.settings.set', {
 					hash: hash,
 					values: values,
 				}, function (err) {
@@ -514,7 +548,7 @@ define('settings', function () {
 					app.flags._unsaved = false;
 
 					// Also save to local ajaxify.data
-					ajaxify.data.settings = values;
+					ajaxify.data[call ? hash : 'settings'] = values;
 
 					if (typeof callback === 'function') {
 						callback(err);

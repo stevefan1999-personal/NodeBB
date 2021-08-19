@@ -22,6 +22,7 @@ define('admin/settings/email', ['ace/ace', 'admin/settings'], function (ace) {
 		$('button[data-action="email.test"]').off('click').on('click', function () {
 			socket.emit('admin.email.test', { template: $('#test-email').val() }, function (err) {
 				if (err) {
+					console.error(err.message);
 					return app.alertError(err.message);
 				}
 				app.alertSuccess('Test Email Sent');
@@ -82,23 +83,25 @@ define('admin/settings/email', ['ace/ace', 'admin/settings'], function (ace) {
 			hour = 0;
 		}
 
-		socket.emit('meta.getServerTime', {}, function (err, now) {
+		socket.emit('admin.getServerTime', {}, function (err, now) {
 			if (err) {
 				return app.alertError(err.message);
 			}
 
-			now = new Date(now);
+			var date = new Date(now.timestamp);
+			var offset = (new Date().getTimezoneOffset() - now.offset) / 60;
+			date.setHours(date.getHours() + offset);
 
-			$('#serverTime').text(now.toString());
+			$('#serverTime').text(date.toLocaleTimeString());
 
-			now.setHours(parseInt(hour, 10), 0, 0, 0);
+			date.setHours(parseInt(hour, 10) - offset, 0, 0, 0);
 
 			// If adjusted time is in the past, move to next day
-			if (now.getTime() < Date.now()) {
-				now.setDate(now.getDate() + 1);
+			if (date.getTime() < Date.now()) {
+				date.setDate(date.getDate() + 1);
 			}
 
-			$('#nextDigestTime').text(now.toString());
+			$('#nextDigestTime').text(date.toLocaleString());
 		});
 	}
 

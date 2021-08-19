@@ -1,32 +1,21 @@
 'use strict';
 
-
 define('forum/category', [
 	'forum/infinitescroll',
 	'share',
 	'navigator',
-	'forum/category/tools',
-	'forum/recent',
+	'topicList',
 	'sort',
-	'components',
-	'translator',
-	'topicSelect',
-	'handleBack',
-], function (infinitescroll, share, navigator, categoryTools, recent, sort, components, translator, topicSelect, handleBack) {
+	'categorySelector',
+	'hooks',
+], function (infinitescroll, share, navigator, topicList, sort, categorySelector, hooks) {
 	var Category = {};
 
 	$(window).on('action:ajaxify.start', function (ev, data) {
 		if (!String(data.url).startsWith('category/')) {
 			navigator.disable();
-
-			removeListeners();
 		}
 	});
-
-	function removeListeners() {
-		categoryTools.removeListeners();
-		recent.removeListeners();
-	}
 
 	Category.init = function () {
 		var	cid = ajaxify.data.cid;
@@ -35,30 +24,38 @@ define('forum/category', [
 
 		share.addShareHandlers(ajaxify.data.name);
 
-		categoryTools.init(cid);
-		recent.watchForNewPosts();
+		topicList.init('category', loadTopicsAfter);
 
-		sort.handleSort('categoryTopicSort', 'user.setCategorySort', 'category/' + ajaxify.data.slug);
+		sort.handleSort('categoryTopicSort', 'category/' + ajaxify.data.slug);
 
-		enableInfiniteLoadingOrPagination();
-
-		handleBack.init(function (after, cb) {
-			loadTopicsAfter(after, 1, cb);
-		});
+		if (!config.usePagination) {
+			navigator.init('[component="category/topic"]', ajaxify.data.topic_count, Category.toTop, Category.toBottom, Category.navigatorCallback);
+		} else {
+			navigator.disable();
+		}
 
 		handleScrollToTopicIndex();
 
 		handleIgnoreWatch(cid);
 
-		$(window).trigger('action:topics.loaded', { topics: ajaxify.data.topics });
-		$(window).trigger('action:category.loaded', { cid: ajaxify.data.cid });
+		handleLoadMoreSubcategories();
+
+		categorySelector.init($('[component="category-selector"]'), {
+			privilege: 'find',
+			parentCid: ajaxify.data.cid,
+			onSelect: function (category) {
+				ajaxify.go('/category/' + category.cid);
+			},
+		});
+
+		hooks.fire('action:topics.loaded', { topics: ajaxify.data.topics });
+		hooks.fire('action:category.loaded', { cid: ajaxify.data.cid });
 	};
 
 	function handleScrollToTopicIndex() {
-		var parts = window.location.pathname.split('/');
-		var topicIndex = parts[parts.length - 1];
+		var topicIndex = ajaxify.data.topicIndex;
 		if (topicIndex && utils.isNumber(topicIndex)) {
-			topicIndex = Math.max(0, parseInt(topicIndex, 10) - 1);
+			topicIndex = Math.max(0, parseInt(topicIndex, 10));
 			if (topicIndex && window.location.search.indexOf('page=') === -1) {
 				navigator.scrollToElement($('[component="category/topic"][data-index="' + topicIndex + '"]'), true, 0);
 			}
@@ -66,23 +63,54 @@ define('forum/category', [
 	}
 
 	function handleIgnoreWatch(cid) {
-		$('[component="category/watching"], [component="category/ignoring"]').on('click', function () {
+		$('[component="category/watching"], [component="category/ignoring"], [component="category/notwatching"]').on('click', function () {
 			var $this = $(this);
-			var command = $this.attr('component') === 'category/watching' ? 'watch' : 'ignore';
+			var state = $this.attr('data-state');
 
-			socket.emit('categories.' + command, cid, function (err) {
+			socket.emit('categories.setWatchState', { cid: cid, state: state }, function (err) {
 				if (err) {
 					return app.alertError(err.message);
 				}
 
-				$('[component="category/watching/menu"]').toggleClass('hidden', command !== 'watch');
-				$('[component="category/watching/check"]').toggleClass('fa-check', command === 'watch');
+				$('[component="category/watching/menu"]').toggleClass('hidden', state !== 'watching');
+				$('[component="category/watching/check"]').toggleClass('fa-check', state === 'watching');
 
-				$('[component="category/ignoring/menu"]').toggleClass('hidden', command !== 'ignore');
-				$('[component="category/ignoring/check"]').toggleClass('fa-check', command === 'ignore');
+				$('[component="category/notwatching/menu"]').toggleClass('hidden', state !== 'notwatching');
+				$('[component="category/notwatching/check"]').toggleClass('fa-check', state === 'notwatching');
 
-				app.alertSuccess('[[category:' + command + '.message]]');
+				$('[component="category/ignoring/menu"]').toggleClass('hidden', state !== 'ignoring');
+				$('[component="category/ignoring/check"]').toggleClass('fa-check', state === 'ignoring');
+
+				app.alertSuccess('[[category:' + state + '.message]]');
 			});
+		});
+	}
+
+	function handleLoadMoreSubcategories() {
+		$('[component="category/load-more-subcategories"]').on('click', function () {
+			var btn = $(this);
+			socket.emit('categories.loadMoreSubCategories', {
+				cid: ajaxify.data.cid,
+				start: ajaxify.data.nextSubCategoryStart,
+			}, function (err, data) {
+				if (err) {
+					return app.alertError(err);
+				}
+				btn.toggleClass('hidden', !data.length || data.length < ajaxify.data.subCategoriesPerPage);
+				if (!data.length) {
+					return;
+				}
+				app.parseAndTranslate('category', 'children', { children: data }, function (html) {
+					html.find('.timeago').timeago();
+					$('[component="category/subcategory/container"]').append(html);
+					utils.makeNumbersHumanReadable(html.find('.human-readable-number'));
+					app.createUserTooltips(html);
+					ajaxify.data.nextSubCategoryStart += ajaxify.data.subCategoriesPerPage;
+					ajaxify.data.subCategoriesLeft -= data.length;
+					btn.translateText('[[category:x-more-categories, ' + ajaxify.data.subCategoriesLeft + ']]');
+				});
+			});
+			return false;
 		});
 	}
 
@@ -104,34 +132,10 @@ define('forum/category', [
 		return bottomIndex;
 	};
 
-	function enableInfiniteLoadingOrPagination() {
-		if (!config.usePagination) {
-			navigator.init('[component="category/topic"]', ajaxify.data.topic_count, Category.toTop, Category.toBottom, Category.navigatorCallback);
-			infinitescroll.init($('[component="category"]'), Category.loadMoreTopics);
-		} else {
-			navigator.disable();
-		}
-	}
-
-	Category.loadMoreTopics = function (direction) {
-		if (!$('[component="category"]').length || !$('[component="category"]').children().length) {
-			return;
-		}
-
-		var topics = $('[component="category/topic"]');
-		var afterEl = direction > 0 ? topics.last() : topics.first();
-		var after = (parseInt(afterEl.attr('data-index'), 10) || 0) + (direction > 0 ? 1 : 0);
-
-		loadTopicsAfter(after, direction);
-	};
-
 	function loadTopicsAfter(after, direction, callback) {
 		callback = callback || function () {};
-		if (!utils.isNumber(after) || (after === 0 && components.get('category/topic', 'index', 0).length)) {
-			return callback();
-		}
 
-		$(window).trigger('action:category.loading');
+		hooks.fire('action:category.loading');
 		var params = utils.params();
 		infinitescroll.loadMore('categories.loadMore', {
 			cid: ajaxify.data.cid,
@@ -140,78 +144,10 @@ define('forum/category', [
 			query: params,
 			categoryTopicSort: config.categoryTopicSort,
 		}, function (data, done) {
-			if (data.topics && data.topics.length) {
-				Category.onTopicsLoaded(data, direction, done);
-			} else {
-				done();
-			}
-
-			$(window).trigger('action:category.loaded');
-			callback();
+			hooks.fire('action:category.loaded');
+			callback(data, done);
 		});
 	}
-
-
-	Category.onTopicsLoaded = function (data, direction, callback) {
-		if (!data || !data.topics.length) {
-			return callback();
-		}
-
-		function removeAlreadyAddedTopics(topics) {
-			return topics.filter(function (topic) {
-				return components.get('category/topic', 'tid', topic.tid).length === 0;
-			});
-		}
-
-		data.topics = removeAlreadyAddedTopics(data.topics);
-		if (!data.topics.length) {
-			return callback();
-		}
-
-		data.showSelect = data.privileges.editable;
-
-		var after;
-		var before;
-		var topics = $('[component="category/topic"]');
-
-		if (direction > 0 && topics.length) {
-			after = topics.last();
-		} else if (direction < 0 && topics.length) {
-			before = topics.first();
-		}
-
-		app.parseAndTranslate('category', 'topics', data, function (html) {
-			$('[component="category"]').removeClass('hidden');
-			$('.category-sidebar').removeClass('hidden');
-
-			$('#category-no-topics').remove();
-
-			if (after) {
-				html.insertAfter(after);
-			} else if (before) {
-				var height = $(document).height();
-				var scrollTop = $(window).scrollTop();
-
-				html.insertBefore(before);
-
-				$(window).scrollTop(scrollTop + ($(document).height() - height));
-			} else {
-				$('[component="category"]').append(html);
-			}
-
-			if (!topicSelect.getSelectedTids().length) {
-				infinitescroll.removeExtra($('[component="category/topic"]'), direction, config.topicsPerPage * 3);
-			}
-
-			html.find('.timeago').timeago();
-			app.createUserTooltips();
-			utils.makeNumbersHumanReadable(html.find('.human-readable-number'));
-
-			$(window).trigger('action:topics.loaded', { topics: data.topics });
-
-			callback();
-		});
-	};
 
 	return Category;
 });

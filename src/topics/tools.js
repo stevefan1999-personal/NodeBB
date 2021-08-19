@@ -1,340 +1,280 @@
 'use strict';
 
-var async = require('async');
-var _ = require('lodash');
+const _ = require('lodash');
 
-var db = require('../database');
-var categories = require('../categories');
-var plugins = require('../plugins');
-var privileges = require('../privileges');
+const db = require('../database');
+const topics = require('.');
+const categories = require('../categories');
+const user = require('../user');
+const plugins = require('../plugins');
+const privileges = require('../privileges');
 
 
 module.exports = function (Topics) {
-	var topicTools = {};
+	const topicTools = {};
 	Topics.tools = topicTools;
 
-	topicTools.delete = function (tid, uid, callback) {
-		toggleDelete(tid, uid, true, callback);
+	topicTools.delete = async function (tid, uid) {
+		return await toggleDelete(tid, uid, true);
 	};
 
-	topicTools.restore = function (tid, uid, callback) {
-		toggleDelete(tid, uid, false, callback);
+	topicTools.restore = async function (tid, uid) {
+		return await toggleDelete(tid, uid, false);
 	};
 
-	function toggleDelete(tid, uid, isDelete, callback) {
-		var topicData;
-		async.waterfall([
-			function (next) {
-				Topics.exists(tid, next);
-			},
-			function (exists, next) {
-				if (!exists) {
-					return next(new Error('[[error:no-topic]]'));
-				}
-				privileges.topics.canDelete(tid, uid, next);
-			},
-			function (canDelete, next) {
-				if (!canDelete) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-				Topics.getTopicFields(tid, ['tid', 'cid', 'uid', 'deleted', 'title', 'mainPid'], next);
-			},
-			function (_topicData, next) {
-				topicData = _topicData;
+	async function toggleDelete(tid, uid, isDelete) {
+		const topicData = await Topics.getTopicData(tid);
+		if (!topicData) {
+			throw new Error('[[error:no-topic]]');
+		}
+		// Scheduled topics can only be purged
+		if (topicData.scheduled) {
+			throw new Error('[[error:invalid-data]]');
+		}
+		const canDelete = await privileges.topics.canDelete(tid, uid);
 
-				if (parseInt(topicData.deleted, 10) === 1 && isDelete) {
-					return callback(new Error('[[error:topic-already-deleted]]'));
-				} else if (parseInt(topicData.deleted, 10) !== 1 && !isDelete) {
-					return callback(new Error('[[error:topic-already-restored]]'));
-				}
+		const data = await plugins.hooks.fire(isDelete ? 'filter:topic.delete' : 'filter:topic.restore', { topicData: topicData, uid: uid, isDelete: isDelete, canDelete: canDelete, canRestore: canDelete });
 
-				Topics[isDelete ? 'delete' : 'restore'](tid, uid, next);
-			},
-			function (next) {
-				categories.updateRecentTidForCid(topicData.cid, next);
-			},
-			function (next) {
-				topicData.deleted = isDelete ? 1 : 0;
+		if ((!data.canDelete && data.isDelete) || (!data.canRestore && !data.isDelete)) {
+			throw new Error('[[error:no-privileges]]');
+		}
+		if (data.topicData.deleted && data.isDelete) {
+			throw new Error('[[error:topic-already-deleted]]');
+		} else if (!data.topicData.deleted && !data.isDelete) {
+			throw new Error('[[error:topic-already-restored]]');
+		}
+		if (data.isDelete) {
+			await Topics.delete(data.topicData.tid, data.uid);
+		} else {
+			await Topics.restore(data.topicData.tid);
+		}
+		const events = await Topics.events.log(tid, { type: isDelete ? 'delete' : 'restore', uid });
 
-				if (isDelete) {
-					plugins.fireHook('action:topic.delete', { topic: topicData, uid: uid });
-				} else {
-					plugins.fireHook('action:topic.restore', { topic: topicData, uid: uid });
-				}
+		data.topicData.deleted = data.isDelete ? 1 : 0;
 
-				var data = {
-					tid: tid,
-					cid: topicData.cid,
-					isDelete: isDelete,
-					uid: uid,
-				};
-
-				next(null, data);
-			},
-		], callback);
+		if (data.isDelete) {
+			plugins.hooks.fire('action:topic.delete', { topic: data.topicData, uid: data.uid });
+		} else {
+			plugins.hooks.fire('action:topic.restore', { topic: data.topicData, uid: data.uid });
+		}
+		const userData = await user.getUserFields(data.uid, ['username', 'userslug']);
+		return {
+			tid: data.topicData.tid,
+			cid: data.topicData.cid,
+			isDelete: data.isDelete,
+			uid: data.uid,
+			user: userData,
+			events,
+		};
 	}
 
-	topicTools.purge = function (tid, uid, callback) {
-		var cid;
-		async.waterfall([
-			function (next) {
-				Topics.exists(tid, next);
-			},
-			function (exists, next) {
-				if (!exists) {
-					return callback();
-				}
-				privileges.topics.canPurge(tid, uid, next);
-			},
-			function (canPurge, next) {
-				if (!canPurge) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
+	topicTools.purge = async function (tid, uid) {
+		const topicData = await Topics.getTopicData(tid);
+		if (!topicData) {
+			throw new Error('[[error:no-topic]]');
+		}
+		const canPurge = await privileges.topics.canPurge(tid, uid);
+		if (!canPurge) {
+			throw new Error('[[error:no-privileges]]');
+		}
 
-				Topics.getTopicField(tid, 'cid', next);
-			},
-			function (_cid, next) {
-				cid = _cid;
-
-				Topics.purgePostsAndTopic(tid, uid, next);
-			},
-			function (next) {
-				next(null, { tid: tid, cid: cid, uid: uid });
-			},
-		], callback);
+		await Topics.purgePostsAndTopic(tid, uid);
+		return { tid: tid, cid: topicData.cid, uid: uid };
 	};
 
-	topicTools.lock = function (tid, uid, callback) {
-		toggleLock(tid, uid, true, callback);
+	topicTools.lock = async function (tid, uid) {
+		return await toggleLock(tid, uid, true);
 	};
 
-	topicTools.unlock = function (tid, uid, callback) {
-		toggleLock(tid, uid, false, callback);
+	topicTools.unlock = async function (tid, uid) {
+		return await toggleLock(tid, uid, false);
 	};
 
-	function toggleLock(tid, uid, lock, callback) {
-		callback = callback || function () {};
+	async function toggleLock(tid, uid, lock) {
+		const topicData = await Topics.getTopicFields(tid, ['tid', 'uid', 'cid']);
+		if (!topicData || !topicData.cid) {
+			throw new Error('[[error:no-topic]]');
+		}
+		const isAdminOrMod = await privileges.categories.isAdminOrMod(topicData.cid, uid);
+		if (!isAdminOrMod) {
+			throw new Error('[[error:no-privileges]]');
+		}
+		await Topics.setTopicField(tid, 'locked', lock ? 1 : 0);
+		topicData.events = await Topics.events.log(tid, { type: lock ? 'lock' : 'unlock', uid });
+		topicData.isLocked = lock; // deprecate in v2.0
+		topicData.locked = lock;
 
-		var topicData;
-
-		async.waterfall([
-			function (next) {
-				Topics.getTopicFields(tid, ['tid', 'uid', 'cid'], next);
-			},
-			function (_topicData, next) {
-				topicData = _topicData;
-				if (!topicData || !topicData.cid) {
-					return next(new Error('[[error:no-topic]]'));
-				}
-				privileges.categories.isAdminOrMod(topicData.cid, uid, next);
-			},
-			function (isAdminOrMod, next) {
-				if (!isAdminOrMod) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-
-				Topics.setTopicField(tid, 'locked', lock ? 1 : 0, next);
-			},
-			function (next) {
-				topicData.isLocked = lock;
-
-				plugins.fireHook('action:topic.lock', { topic: _.clone(topicData), uid: uid });
-
-				next(null, topicData);
-			},
-		], callback);
+		plugins.hooks.fire('action:topic.lock', { topic: _.clone(topicData), uid: uid });
+		return topicData;
 	}
 
-	topicTools.pin = function (tid, uid, callback) {
-		togglePin(tid, uid, true, callback);
+	topicTools.pin = async function (tid, uid) {
+		return await togglePin(tid, uid, true);
 	};
 
-	topicTools.unpin = function (tid, uid, callback) {
-		togglePin(tid, uid, false, callback);
+	topicTools.unpin = async function (tid, uid) {
+		return await togglePin(tid, uid, false);
 	};
 
-	function togglePin(tid, uid, pin, callback) {
-		var topicData;
-		async.waterfall([
-			function (next) {
-				Topics.getTopicData(tid, next);
-			},
-			function (_topicData, next) {
-				topicData = _topicData;
-				if (!topicData) {
-					return callback(new Error('[[error:no-topic]]'));
-				}
-				privileges.categories.isAdminOrMod(_topicData.cid, uid, next);
-			},
-			function (isAdminOrMod, next) {
-				if (!isAdminOrMod) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
+	topicTools.setPinExpiry = async (tid, expiry, uid) => {
+		if (isNaN(parseInt(expiry, 10)) || expiry <= Date.now()) {
+			throw new Error('[[error:invalid-data]]');
+		}
 
-				async.parallel([
-					async.apply(Topics.setTopicField, tid, 'pinned', pin ? 1 : 0),
-					function (next) {
-						if (pin) {
-							async.parallel([
-								async.apply(db.sortedSetAdd, 'cid:' + topicData.cid + ':tids:pinned', Date.now(), tid),
-								async.apply(db.sortedSetRemove, 'cid:' + topicData.cid + ':tids', tid),
-								async.apply(db.sortedSetRemove, 'cid:' + topicData.cid + ':tids:posts', tid),
-								async.apply(db.sortedSetRemove, 'cid:' + topicData.cid + ':tids:votes', tid),
-							], next);
-						} else {
-							async.parallel([
-								async.apply(db.sortedSetRemove, 'cid:' + topicData.cid + ':tids:pinned', tid),
-								async.apply(db.sortedSetAdd, 'cid:' + topicData.cid + ':tids', topicData.lastposttime, tid),
-								async.apply(db.sortedSetAdd, 'cid:' + topicData.cid + ':tids:posts', topicData.postcount, tid),
-								async.apply(db.sortedSetAdd, 'cid:' + topicData.cid + ':tids:votes', parseInt(topicData.votes, 10) || 0, tid),
-							], next);
-						}
-					},
-				], next);
-			},
-			function (results, next) {
-				topicData.isPinned = pin;
+		const topicData = await Topics.getTopicFields(tid, ['tid', 'uid', 'cid']);
+		const isAdminOrMod = await privileges.categories.isAdminOrMod(topicData.cid, uid);
+		if (!isAdminOrMod) {
+			throw new Error('[[error:no-privileges]]');
+		}
 
-				plugins.fireHook('action:topic.pin', { topic: _.clone(topicData), uid: uid });
+		await Topics.setTopicField(tid, 'pinExpiry', expiry);
+		plugins.hooks.fire('action:topic.setPinExpiry', { topic: _.clone(topicData), uid: uid });
+	};
 
-				next(null, topicData);
-			},
-		], callback);
+	topicTools.checkPinExpiry = async (tids) => {
+		const expiry = (await topics.getTopicsFields(tids, ['pinExpiry'])).map(obj => obj.pinExpiry);
+		const now = Date.now();
+
+		tids = await Promise.all(tids.map(async (tid, idx) => {
+			if (expiry[idx] && parseInt(expiry[idx], 10) <= now) {
+				await togglePin(tid, 'system', false);
+				return null;
+			}
+
+			return tid;
+		}));
+
+		return tids.filter(Boolean);
+	};
+
+	async function togglePin(tid, uid, pin) {
+		const topicData = await Topics.getTopicData(tid);
+		if (!topicData) {
+			throw new Error('[[error:no-topic]]');
+		}
+
+		if (topicData.scheduled) {
+			throw new Error('[[error:cant-pin-scheduled]]');
+		}
+
+		if (uid !== 'system' && !await privileges.topics.isAdminOrMod(tid, uid)) {
+			throw new Error('[[error:no-privileges]]');
+		}
+
+		const promises = [
+			Topics.setTopicField(tid, 'pinned', pin ? 1 : 0),
+			Topics.events.log(tid, { type: pin ? 'pin' : 'unpin', uid }),
+		];
+		if (pin) {
+			promises.push(db.sortedSetAdd(`cid:${topicData.cid}:tids:pinned`, Date.now(), tid));
+			promises.push(db.sortedSetsRemove([
+				`cid:${topicData.cid}:tids`,
+				`cid:${topicData.cid}:tids:posts`,
+				`cid:${topicData.cid}:tids:votes`,
+			], tid));
+		} else {
+			promises.push(db.sortedSetRemove(`cid:${topicData.cid}:tids:pinned`, tid));
+			promises.push(Topics.deleteTopicField(tid, 'pinExpiry'));
+			promises.push(db.sortedSetAddBulk([
+				[`cid:${topicData.cid}:tids`, topicData.lastposttime, tid],
+				[`cid:${topicData.cid}:tids:posts`, topicData.postcount, tid],
+				[`cid:${topicData.cid}:tids:votes`, parseInt(topicData.votes, 10) || 0, tid],
+			]));
+			topicData.pinExpiry = undefined;
+			topicData.pinExpiryISO = undefined;
+		}
+
+		const results = await Promise.all(promises);
+
+		topicData.isPinned = pin; // deprecate in v2.0
+		topicData.pinned = pin;
+		topicData.events = results[1];
+
+		plugins.hooks.fire('action:topic.pin', { topic: _.clone(topicData), uid });
+
+		return topicData;
 	}
 
-	topicTools.orderPinnedTopics = function (uid, data, callback) {
-		var cid;
-		async.waterfall([
-			function (next) {
-				var tids = data.map(function (topic) {
-					return topic && topic.tid;
-				});
-				Topics.getTopicsFields(tids, ['cid'], next);
-			},
-			function (topicData, next) {
-				var uniqueCids = _.uniq(topicData.map(function (topicData) {
-					return topicData && parseInt(topicData.cid, 10);
-				}));
+	topicTools.orderPinnedTopics = async function (uid, data) {
+		const tids = data.map(topic => topic && topic.tid);
+		const topicData = await Topics.getTopicsFields(tids, ['cid']);
 
-				if (uniqueCids.length > 1 || !uniqueCids.length || !uniqueCids[0]) {
-					return next(new Error('[[error:invalid-data]]'));
-				}
-				cid = uniqueCids[0];
+		const uniqueCids = _.uniq(topicData.map(topicData => topicData && topicData.cid));
+		if (uniqueCids.length > 1 || !uniqueCids.length || !uniqueCids[0]) {
+			throw new Error('[[error:invalid-data]]');
+		}
 
-				privileges.categories.isAdminOrMod(cid, uid, next);
-			},
-			function (isAdminOrMod, next) {
-				if (!isAdminOrMod) {
-					return next(new Error('[[error:no-privileges]]'));
-				}
-				async.eachSeries(data, function (topicData, next) {
-					async.waterfall([
-						function (next) {
-							db.isSortedSetMember('cid:' + cid + ':tids:pinned', topicData.tid, next);
-						},
-						function (isPinned, next) {
-							if (isPinned) {
-								db.sortedSetAdd('cid:' + cid + ':tids:pinned', topicData.order, topicData.tid, next);
-							} else {
-								setImmediate(next);
-							}
-						},
-					], next);
-				}, next);
-			},
-		], callback);
+		const cid = uniqueCids[0];
+
+		const isAdminOrMod = await privileges.categories.isAdminOrMod(cid, uid);
+		if (!isAdminOrMod) {
+			throw new Error('[[error:no-privileges]]');
+		}
+
+		const isPinned = await db.isSortedSetMembers(`cid:${cid}:tids:pinned`, tids);
+		data = data.filter((topicData, index) => isPinned[index]);
+		const bulk = data.map(topicData => [`cid:${cid}:tids:pinned`, topicData.order, topicData.tid]);
+		await db.sortedSetAddBulk(bulk);
 	};
 
-	topicTools.move = function (tid, data, callback) {
-		var topic;
-		var oldCid;
-		var cid = data.cid;
+	topicTools.move = async function (tid, data) {
+		const cid = parseInt(data.cid, 10);
+		const topicData = await Topics.getTopicData(tid);
+		if (!topicData) {
+			throw new Error('[[error:no-topic]]');
+		}
+		if (cid === topicData.cid) {
+			throw new Error('[[error:cant-move-topic-to-same-category]]');
+		}
+		const tags = await Topics.getTopicTags(tid);
+		await db.sortedSetsRemove([
+			`cid:${topicData.cid}:tids`,
+			`cid:${topicData.cid}:tids:pinned`,
+			`cid:${topicData.cid}:tids:posts`,
+			`cid:${topicData.cid}:tids:votes`,
+			`cid:${topicData.cid}:tids:lastposttime`,
+			`cid:${topicData.cid}:recent_tids`,
+			`cid:${topicData.cid}:uid:${topicData.uid}:tids`,
+			...tags.map(tag => `cid:${topicData.cid}:tag:${tag}:topics`),
+		], tid);
 
-		async.waterfall([
-			function (next) {
-				Topics.getTopicData(tid, next);
-			},
-			function (topicData, next) {
-				topic = topicData;
-				if (!topic) {
-					return next(new Error('[[error:no-topic]]'));
-				}
-				if (parseInt(cid, 10) === parseInt(topic.cid, 10)) {
-					return next(new Error('[[error:cant-move-topic-to-same-category]]'));
-				}
-				db.sortedSetsRemove([
-					'cid:' + topicData.cid + ':tids',
-					'cid:' + topicData.cid + ':tids:pinned',
-					'cid:' + topicData.cid + ':tids:posts',
-					'cid:' + topicData.cid + ':tids:votes',
-					'cid:' + topicData.cid + ':tids:lastposttime',
-					'cid:' + topicData.cid + ':recent_tids',
-					'cid:' + topicData.cid + ':uid:' + topicData.uid + ':tids',
-				], tid, next);
-			},
-			function (next) {
-				db.sortedSetAdd('cid:' + cid + ':tids:lastposttime', topic.lastposttime, tid, next);
-			},
-			function (next) {
-				db.sortedSetAdd('cid:' + cid + ':uid:' + topic.uid + ':tids', topic.timestamp, tid, next);
-			},
-			function (next) {
-				if (parseInt(topic.pinned, 10)) {
-					db.sortedSetAdd('cid:' + cid + ':tids:pinned', Date.now(), tid, next);
-				} else {
-					async.parallel([
-						function (next) {
-							db.sortedSetAdd('cid:' + cid + ':tids', topic.lastposttime, tid, next);
-						},
-						function (next) {
-							topic.postcount = topic.postcount || 0;
-							db.sortedSetAdd('cid:' + cid + ':tids:posts', topic.postcount, tid, next);
-						},
-						function (next) {
-							var votes = (parseInt(topic.upvotes, 10) || 0) - (parseInt(topic.downvotes, 10) || 0);
-							db.sortedSetAdd('cid:' + cid + ':tids:votes', votes, tid, next);
-						},
-					], function (err) {
-						next(err);
-					});
-				}
-			},
-			function (next) {
-				oldCid = topic.cid;
-				categories.moveRecentReplies(tid, oldCid, cid, next);
-			},
-			function (next) {
-				async.parallel([
-					function (next) {
-						categories.incrementCategoryFieldBy(oldCid, 'topic_count', -1, next);
-					},
-					function (next) {
-						categories.incrementCategoryFieldBy(cid, 'topic_count', 1, next);
-					},
-					function (next) {
-						categories.updateRecentTid(cid, tid, next);
-					},
-					function (next) {
-						categories.updateRecentTidForCid(oldCid, next);
-					},
-					function (next) {
-						Topics.setTopicFields(tid, {
-							cid: cid,
-							oldCid: oldCid,
-						}, next);
-					},
-				], function (err) {
-					next(err);
-				});
-			},
-			function (next) {
-				var hookData = _.clone(data);
-				hookData.fromCid = oldCid;
-				hookData.toCid = cid;
-				hookData.tid = tid;
-				plugins.fireHook('action:topic.move', hookData);
-				next();
-			},
-		], callback);
+		topicData.postcount = topicData.postcount || 0;
+		const votes = topicData.upvotes - topicData.downvotes;
+
+		const bulk = [
+			[`cid:${cid}:tids:lastposttime`, topicData.lastposttime, tid],
+			[`cid:${cid}:uid:${topicData.uid}:tids`, topicData.timestamp, tid],
+			...tags.map(tag => [`cid:${cid}:tag:${tag}:topics`, topicData.timestamp, tid]),
+		];
+		if (topicData.pinned) {
+			bulk.push([`cid:${cid}:tids:pinned`, Date.now(), tid]);
+		} else {
+			bulk.push([`cid:${cid}:tids`, topicData.lastposttime, tid]);
+			bulk.push([`cid:${cid}:tids:posts`, topicData.postcount, tid]);
+			bulk.push([`cid:${cid}:tids:votes`, votes, tid]);
+		}
+		await db.sortedSetAddBulk(bulk);
+
+		const oldCid = topicData.cid;
+		await categories.moveRecentReplies(tid, oldCid, cid);
+
+		await Promise.all([
+			categories.incrementCategoryFieldBy(oldCid, 'topic_count', -1),
+			categories.incrementCategoryFieldBy(cid, 'topic_count', 1),
+			categories.updateRecentTidForCid(cid),
+			categories.updateRecentTidForCid(oldCid),
+			Topics.setTopicFields(tid, {
+				cid: cid,
+				oldCid: oldCid,
+			}),
+			Topics.updateCategoryTagsCount([oldCid, cid], tags),
+			Topics.events.log(tid, { type: 'move', uid: data.uid, fromCid: oldCid }),
+		]);
+		const hookData = _.clone(data);
+		hookData.fromCid = oldCid;
+		hookData.toCid = cid;
+		hookData.tid = tid;
+
+		plugins.hooks.fire('action:topic.move', hookData);
 	};
 };

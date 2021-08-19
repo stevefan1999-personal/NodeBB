@@ -1,11 +1,7 @@
-<form role="form" class="category" data-cid="{category.cid}">
+<div class="category" data-cid="{category.cid}">
 	<div class="row">
 		<div class="col-md-3 pull-right">
-			<select id="category-selector" class="form-control">
-				<!-- BEGIN allCategories -->
-				<option value="{allCategories.value}" <!-- IF allCategories.selected -->selected<!-- ENDIF allCategories.selected -->>{allCategories.text}</option>
-				<!-- END allCategories -->
-			</select>
+			<!-- IMPORT partials/category-selector.tpl -->
 		</div>
 	</div>
 
@@ -23,7 +19,7 @@
 					<label for="cid-{category.cid}-description">
 						[[admin/manage/categories:description]]
 					</label>
-					<input id="cid-{category.cid}-description" data-name="description" placeholder="[[admin/manage/categories:description]]" value="{category.description}" class="form-control category_description description" /><br />
+					<textarea id="cid-{category.cid}-description" data-name="description" placeholder="[[admin/manage/categories:description]]" class="form-control category_description description" />{category.description}</textarea><br />
 				</fieldset>
 
 				<fieldset class="row">
@@ -32,7 +28,7 @@
 							<label for="cid-{category.cid}-bgColor">
 								[[admin/manage/categories:bg-color]]
 							</label>
-							<input id="cid-{category.cid}-bgColor" placeholder="#0059b2" data-name="bgColor" value="{category.bgColor}" class="form-control category_bgColor" />
+							<input type="color" id="cid-{category.cid}-bgColor" placeholder="#0059b2" data-name="bgColor" value="{category.bgColor}" class="form-control category_bgColor" />
 						</div>
 					</div>
 					<div class="col-sm-4 col-xs-12">
@@ -40,9 +36,10 @@
 							<label for="cid-{category.cid}-color">
 								[[admin/manage/categories:text-color]]
 							</label>
-							<input id="cid-{category.cid}-color" placeholder="#fff" data-name="color" value="{category.color}" class="form-control category_color" />
+							<input type="color" id="cid-{category.cid}-color" placeholder="#ffffff" data-name="color" value="{category.color}" class="form-control category_color" />
 						</div>
 					</div>
+
 					<div class="col-sm-4 col-xs-12">
 						<div class="form-group">
 							<label for="cid-{category.cid}-imageClass">
@@ -60,7 +57,12 @@
 							<label for="cid-{category.cid}-class">
 								[[admin/manage/categories:custom-class]]
 							</label>
-							<input id="cid-{category.cid}-class" type="text" class="form-control" placeholder="col-md-6 col-xs-6" data-name="class" value="{category.class}" />
+							<input list="customClasses" id="cid-{category.cid}-class" type="text" class="form-control" placeholder="<!-- IF customClasses.length --><!-- BEGIN customClasses --><!-- IF @first -->{@value}<!-- ENDIF --><!-- END --><!-- ELSE -->col-md-6 col-xs-6<!-- ENDIF -->" data-name="class" value="{category.class}" />
+							<datalist id="customClasses">
+								<!-- BEGIN customClasses -->
+								<option>{@value}</option>
+								<!-- END customClasses -->
+							</datalist>
 						</div>
 					</div>
 					<div class="col-sm-4 col-xs-12">
@@ -79,7 +81,43 @@
 							<input id="cid-{category.cid}-link" type="text" class="form-control" placeholder="http://domain.com" data-name="link" value="{category.link}" />
 						</div>
 					</div>
-					<div class="col-sm-6 col-xs-12">
+				</fieldset>
+				<fieldset class="row">
+					<div class="col-sm-4 col-xs-12">
+						<div class="form-group">
+							<label for="cid-subcategories-per-page">
+								[[admin/manage/categories:subcategories-per-page]]
+							</label>
+							<input id="cid-subcategories-per-page" type="text" class="form-control" data-name="subCategoriesPerPage" value="{category.subCategoriesPerPage}" />
+						</div>
+					</div>
+					<div class="col-sm-4 col-xs-12">
+						<div class="form-group">
+							<label for="cid-min-tags">
+								[[admin/settings/tags:min-per-topic]]
+							</label>
+							<input id="cid-min-tags" type="text" class="form-control" data-name="minTags" value="{category.minTags}" />
+						</div>
+					</div>
+					<div class="col-sm-4 col-xs-12">
+						<div class="form-group">
+							<label for="cid-max-tags">
+								[[admin/settings/tags:max-per-topic]]
+							</label>
+							<input id="cid-max-tags" type="text" class="form-control" data-name="maxTags" value="{category.maxTags}" />
+						</div>
+					</div>
+				</fieldset>
+				<fieldset class="row">
+					<div class="col-lg-12">
+						<div class="form-group">
+							<label for="tag-whitelist">[[admin/manage/categories:tag-whitelist]]</label><br />
+							<input id="tag-whitelist" type="text" class="form-control" data-name="tagWhitelist" value="" />
+						</div>
+					</div>
+				</fieldset>
+				<fieldset class="row">
+					<div class="col-lg-6">
 						<div class="form-group">
 							<div class="checkbox">
 								<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
@@ -89,10 +127,18 @@
 							</div>
 						</div>
 					</div>
-				</fieldset>
-				<fieldset>
-					<label for="tag-whitelist">Tag Whitelist</label><br />
-					<input id="tag-whitelist" type="text" class="form-control" placeholder="Enter category tags here" data-name="tagWhitelist" value="" />
+					{{{ if postQueueEnabled }}}
+					<div class="col-lg-6">
+						<div class="form-group">
+							<div class="checkbox">
+								<label class="mdl-switch mdl-js-switch mdl-js-ripple-effect">
+									<input type="checkbox" class="mdl-switch__input" data-name="postQueue" {{{ if category.postQueue }}}checked{{{ end }}} />
+									<span class="mdl-switch__label"><strong>[[admin/manage/categories:post-queue]]</strong></span>
+								</label>
+							</div>
+						</div>
+					</div>
+					{{{ end }}}
 				</fieldset>
 			</div>
 		</div>
@@ -117,14 +163,14 @@
 								[[admin/manage/categories:upload-image]]
 							</button>
 						</div>
-						<!-- IF category.image -->
+						<!-- IF category.backgroundImage -->
 						<div class="btn-group">
 							<button class="btn btn-warning delete-image">
 								<i data-name="icon" value="fa-times" class="fa fa-times"></i>
 								[[admin/manage/categories:delete-image]]
 							</button>
 						</div>
-						<!-- ENDIF category.image -->
+						<!-- ENDIF category.backgroundImage -->
 					</div><br />
 
 					<fieldset>
@@ -133,7 +179,7 @@
 								[[admin/manage/categories:category-image]]
 							</label>
 							<br/>
-							<input id="category-image" type="text" class="form-control" placeholder="[[admin/manage/categories:category-image]]" data-name="image" value="{category.image}" />
+							<input id="category-image" type="text" class="form-control" placeholder="[[admin/manage/categories:category-image]]" data-name="backgroundImage" value="{category.backgroundImage}" />
 						</div>
 					</fieldset>
 
@@ -152,10 +198,23 @@
 						</div>
 					</fieldset>
 					<hr/>
+					<a href="{config.relative_path}/admin/manage/privileges/{category.cid}" class="btn btn-info btn-block">
+						<i class="fa fa-gear"></i> [[admin/manage/privileges:edit-privileges]]
+					</a>
+					<a href="{config.relative_path}/category/{category.cid}" class="btn btn-info btn-block">
+						<i class="fa fa-eye"></i> [[admin/manage/categories:view-category]]
+					</a>
 					<button class="btn btn-info btn-block copy-settings">
 						<i class="fa fa-files-o"></i> [[admin/manage/categories:copy-settings]]
 					</button>
 					<hr />
+					<button data-action="toggle" data-disabled="{category.disabled}" class="btn btn-sm btn-block <!-- IF category.disabled -->btn-primary<!-- ELSE -->btn-danger<!-- ENDIF category.disabled -->">
+						<!-- IF category.disabled -->
+						[[admin/manage/categories:enable]]
+						<!-- ELSE -->
+						[[admin/manage/categories:disable]]
+						<!-- ENDIF category.disabled -->
+					</button>
 					<button class="btn btn-danger btn-block purge">
 						<i class="fa fa-eraser"></i> [[admin/manage/categories:purge]]
 					</button>
@@ -163,7 +222,7 @@
 			</div>
 		</div>
 	</div>
-</form>
+</div>
 
 <button id="save" class="floating-button mdl-button mdl-js-button mdl-button--fab mdl-js-ripple-effect mdl-button--colored">
     <i class="material-icons">save</i>

@@ -1,129 +1,169 @@
 'use strict';
 
-var async = require('async');
-var winston = require('winston');
-var jsesc = require('jsesc');
-var nconf = require('nconf');
-var semver = require('semver');
+const winston = require('winston');
+const jsesc = require('jsesc');
+const nconf = require('nconf');
+const semver = require('semver');
 
-var user = require('../user');
-var meta = require('../meta');
-var plugins = require('../plugins');
-var versions = require('../admin/versions');
+const user = require('../user');
+const meta = require('../meta');
+const plugins = require('../plugins');
+const privileges = require('../privileges');
+const utils = require('../../public/src/utils');
+const versions = require('../admin/versions');
+const helpers = require('./helpers');
 
-var controllers = {
+const controllers = {
 	api: require('../controllers/api'),
 	helpers: require('../controllers/helpers'),
 };
 
-module.exports = function (middleware) {
-	middleware.admin = {};
-	middleware.admin.isAdmin = function (req, res, next) {
-		winston.warn('[middleware.admin.isAdmin] deprecation warning, no need to use this from plugins!');
-		middleware.isAdmin(req, res, next);
+const middleware = module.exports;
+
+middleware.buildHeader = helpers.try(async (req, res, next) => {
+	res.locals.renderAdminHeader = true;
+	res.locals.config = await controllers.api.loadConfig(req);
+	next();
+});
+
+middleware.renderHeader = async (req, res, data) => {
+	const custom_header = {
+		plugins: [],
+		authentication: [],
+	};
+	res.locals.config = res.locals.config || {};
+
+	const results = await utils.promiseParallel({
+		userData: user.getUserFields(req.uid, ['username', 'userslug', 'email', 'picture', 'email:confirmed']),
+		scripts: getAdminScripts(),
+		custom_header: plugins.hooks.fire('filter:admin.header.build', custom_header),
+		configs: meta.configs.list(),
+		latestVersion: getLatestVersion(),
+		privileges: privileges.admin.get(req.uid),
+	});
+
+	const { userData } = results;
+	userData.uid = req.uid;
+	userData['email:confirmed'] = userData['email:confirmed'] === 1;
+	userData.privileges = results.privileges;
+
+	let acpPath = req.path.slice(1).split('/');
+	acpPath.forEach((path, i) => {
+		acpPath[i] = path.charAt(0).toUpperCase() + path.slice(1);
+	});
+	acpPath = acpPath.join(' > ');
+
+	const version = nconf.get('version');
+
+	res.locals.config.userLang = res.locals.config.acpLang || res.locals.config.userLang;
+	let templateValues = {
+		config: res.locals.config,
+		configJSON: jsesc(JSON.stringify(res.locals.config), { isScriptContext: true }),
+		relative_path: res.locals.config.relative_path,
+		adminConfigJSON: encodeURIComponent(JSON.stringify(results.configs)),
+		user: userData,
+		userJSON: jsesc(JSON.stringify(userData), { isScriptContext: true }),
+		plugins: results.custom_header.plugins,
+		authentication: results.custom_header.authentication,
+		scripts: results.scripts,
+		'cache-buster': meta.config['cache-buster'] || '',
+		env: !!process.env.NODE_ENV,
+		title: `${acpPath || 'Dashboard'} | NodeBB Admin Control Panel`,
+		bodyClass: data.bodyClass,
+		version: version,
+		latestVersion: results.latestVersion,
+		upgradeAvailable: results.latestVersion && semver.gt(results.latestVersion, version),
+		showManageMenu: results.privileges.superadmin || ['categories', 'privileges', 'users', 'admins-mods', 'groups', 'tags', 'settings'].some(priv => results.privileges[`admin:${priv}`]),
 	};
 
-	middleware.admin.buildHeader = function (req, res, next) {
-		res.locals.renderAdminHeader = true;
+	templateValues.template = { name: res.locals.template };
+	templateValues.template[res.locals.template] = true;
+	({ templateData: templateValues } = await plugins.hooks.fire('filter:middleware.renderAdminHeader', {
+		req,
+		res,
+		templateData: templateValues,
+		data,
+	}));
 
-		async.waterfall([
-			function (next) {
-				controllers.api.getConfig(req, res, next);
-			},
-			function (config, next) {
-				res.locals.config = config;
-				next();
-			},
-		], next);
-	};
+	return await req.app.renderAsync('admin/header', templateValues);
+};
 
-	middleware.admin.renderHeader = function (req, res, data, next) {
-		var custom_header = {
-			plugins: [],
-			authentication: [],
-		};
-		res.locals.config = res.locals.config || {};
-		async.waterfall([
-			function (next) {
-				async.parallel({
-					userData: function (next) {
-						user.getUserFields(req.uid, ['username', 'userslug', 'email', 'picture', 'email:confirmed'], next);
-					},
-					scripts: function (next) {
-						getAdminScripts(next);
-					},
-					custom_header: function (next) {
-						plugins.fireHook('filter:admin.header.build', custom_header, next);
-					},
-					configs: function (next) {
-						meta.configs.list(next);
-					},
-					latestVersion: function (next) {
-						versions.getLatestVersion(function (err, result) {
-							if (err) {
-								winston.error('[acp] Failed to fetch latest version', err);
-							}
+async function getAdminScripts() {
+	const scripts = await plugins.hooks.fire('filter:admin.scripts.get', []);
+	return scripts.map(script => ({ src: script }));
+}
 
-							next(null, err ? null : result);
-						});
-					},
-				}, next);
-			},
-			function (results, next) {
-				var userData = results.userData;
-				userData.uid = req.uid;
-				userData['email:confirmed'] = parseInt(userData['email:confirmed'], 10) === 1;
+async function getLatestVersion() {
+	try {
+		const result = await versions.getLatestVersion();
+		return result;
+	} catch (err) {
+		winston.error(`[acp] Failed to fetch latest version${err.stack}`);
+	}
+	return null;
+}
 
-				var acpPath = req.path.slice(1).split('/');
-				acpPath.forEach(function (path, i) {
-					acpPath[i] = path.charAt(0).toUpperCase() + path.slice(1);
-				});
-				acpPath = acpPath.join(' > ');
+middleware.renderFooter = async function (req, res, data) {
+	return await req.app.renderAsync('admin/footer', data);
+};
 
-				var version = nconf.get('version');
-
-				res.locals.config.userLang = res.locals.config.acpLang || res.locals.config.userLang;
-				var templateValues = {
-					config: res.locals.config,
-					configJSON: jsesc(JSON.stringify(res.locals.config), { isScriptContext: true }),
-					relative_path: res.locals.config.relative_path,
-					adminConfigJSON: encodeURIComponent(JSON.stringify(results.configs)),
-					user: userData,
-					userJSON: jsesc(JSON.stringify(userData), { isScriptContext: true }),
-					plugins: results.custom_header.plugins,
-					authentication: results.custom_header.authentication,
-					scripts: results.scripts,
-					'cache-buster': meta.config['cache-buster'] || '',
-					env: !!process.env.NODE_ENV,
-					title: (acpPath || 'Dashboard') + ' | NodeBB Admin Control Panel',
-					bodyClass: data.bodyClass,
-					version: version,
-					latestVersion: results.latestVersion,
-					upgradeAvailable: results.latestVersion && semver.gt(results.latestVersion, version),
-				};
-
-				templateValues.template = { name: res.locals.template };
-				templateValues.template[res.locals.template] = true;
-
-				req.app.render('admin/header', templateValues, next);
-			},
-		], next);
-	};
-
-	function getAdminScripts(callback) {
-		async.waterfall([
-			function (next) {
-				plugins.fireHook('filter:admin.scripts.get', [], next);
-			},
-			function (scripts, next) {
-				next(null, scripts.map(function (script) {
-					return { src: script };
-				}));
-			},
-		], callback);
+middleware.checkPrivileges = helpers.try(async (req, res, next) => {
+	// Kick out guests, obviously
+	if (req.uid <= 0) {
+		return controllers.helpers.notAllowed(req, res);
 	}
 
-	middleware.admin.renderFooter = function (req, res, data, next) {
-		req.app.render('admin/footer', data, next);
-	};
-};
+	// Otherwise, check for privilege based on page (if not in mapping, deny access)
+	const path = req.path.replace(/^(\/api)?\/admin\/?/g, '');
+	if (path) {
+		const privilege = privileges.admin.resolve(path);
+		if (!await privileges.admin.can(privilege, req.uid)) {
+			return controllers.helpers.notAllowed(req, res);
+		}
+	} else {
+		// If accessing /admin, check for any valid admin privs
+		const privilegeSet = await privileges.admin.get(req.uid);
+		if (!Object.values(privilegeSet).some(Boolean)) {
+			return controllers.helpers.notAllowed(req, res);
+		}
+	}
+
+	// If user does not have password
+	const hasPassword = await user.hasPassword(req.uid);
+	if (!hasPassword) {
+		return next();
+	}
+
+	// Reject if they need to re-login (due to ACP timeout), otherwise extend logout timer
+	const loginTime = req.session.meta ? req.session.meta.datetime : 0;
+	const adminReloginDuration = meta.config.adminReloginDuration * 60000;
+	const disabled = meta.config.adminReloginDuration === 0;
+	if (disabled || (loginTime && parseInt(loginTime, 10) > Date.now() - adminReloginDuration)) {
+		const timeLeft = parseInt(loginTime, 10) - (Date.now() - adminReloginDuration);
+		if (req.session.meta && timeLeft < Math.min(60000, adminReloginDuration)) {
+			req.session.meta.datetime += Math.min(60000, adminReloginDuration);
+		}
+
+		return next();
+	}
+
+	let returnTo = req.path;
+	if (nconf.get('relative_path')) {
+		returnTo = req.path.replace(new RegExp(`^${nconf.get('relative_path')}`), '');
+	}
+	returnTo = returnTo.replace(/^\/api/, '');
+
+	req.session.returnTo = returnTo;
+	req.session.forceLogin = 1;
+
+	await plugins.hooks.fire('response:auth.relogin', { req, res });
+	if (res.headersSent) {
+		return;
+	}
+
+	if (res.locals.isAPI) {
+		res.status(401).json({});
+	} else {
+		res.redirect(`${nconf.get('relative_path')}/login?local=1`);
+	}
+});

@@ -2,5 +2,11 @@
 	"events": "أحداث",
 	"no-events": "لا توجد أحداث",
 	"control-panel": "لوحة تحكم الأحداث",
-	"delete-events": "حذف الأحداث"
+	"delete-events": "حذف الاحداث",
+	"filters": "تصفية",
+	"filters-apply": "تطبيق التصفية",
+	"filter-type": "نوع الحدث",
+	"filter-start": "تاريخ البدء",
+	"filter-end": "تاريخ الانتهاء",
+	"filter-perPage": "لكل صفحة"
 }

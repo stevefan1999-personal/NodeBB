@@ -46,6 +46,10 @@ define('admin/modules/search', ['mousetrap'], function (mousetrap) {
 	}
 
 	search.init = function () {
+		if (!app.user.privileges['admin:settings']) {
+			return;
+		}
+
 		socket.emit('admin.getSearchDict', {}, function (err, dict) {
 			if (err) {
 				app.alertError(err);
@@ -86,10 +90,16 @@ define('admin/modules/search', ['mousetrap'], function (mousetrap) {
 			return false;
 		});
 
+		mousetrap.bind('/', function (ev) {
+			input.select();
+			ev.preventDefault();
+		});
+
 		mousetrap(input[0]).bind(['up', 'down'], function (ev, key) {
 			var next;
 			if (key === 'up') {
-				next = menu.find('li.result > a.focus').removeClass('focus').parent().prev('.result').children();
+				next = menu.find('li.result > a.focus').removeClass('focus').parent().prev('.result')
+					.children();
 				if (!next.length) {
 					next = menu.find('li.result > a').last();
 				}
@@ -98,7 +108,8 @@ define('admin/modules/search', ['mousetrap'], function (mousetrap) {
 					next[0].scrollIntoView(true);
 				}
 			} else if (key === 'down') {
-				next = menu.find('li.result > a.focus').removeClass('focus').parent().next('.result').children();
+				next = menu.find('li.result > a.focus').removeClass('focus').parent().next('.result')
+					.children();
 				if (!next.length) {
 					next = menu.find('li.result > a').first();
 				}

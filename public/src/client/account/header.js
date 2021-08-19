@@ -7,7 +7,9 @@ define('forum/account/header', [
 	'components',
 	'translator',
 	'benchpress',
-], function (coverPhoto, pictureCropper, components, translator, Benchpress) {
+	'accounts/delete',
+	'api',
+], function (coverPhoto, pictureCropper, components, translator, Benchpress, AccountsDelete, api) {
 	var AccountHeader = {};
 	var isAdminOrSelfOrGlobalMod;
 
@@ -49,12 +51,23 @@ define('forum/account/header', [
 		});
 
 
-		components.get('account/ban').on('click', banAccount);
+		components.get('account/ban').on('click', function () {
+			banAccount(ajaxify.data.theirid);
+		});
 		components.get('account/unban').on('click', unbanAccount);
-		components.get('account/delete').on('click', deleteAccount);
+		components.get('account/delete-account').on('click', handleDeleteEvent.bind(null, 'account'));
+		components.get('account/delete-content').on('click', handleDeleteEvent.bind(null, 'content'));
+		components.get('account/delete-all').on('click', handleDeleteEvent.bind(null, 'purge'));
 		components.get('account/flag').on('click', flagAccount);
 		components.get('account/block').on('click', toggleBlockAccount);
 	};
+
+	function handleDeleteEvent(type) {
+		AccountsDelete[type](ajaxify.data.theirid);
+	}
+
+	// TODO: This exported method is used in forum/flags/detail -- refactor??
+	AccountHeader.banAccount = banAccount;
 
 	function hidePrivateLinks() {
 		if (!app.user.uid || app.user.uid !== parseInt(ajaxify.data.theirid, 10)) {
@@ -103,22 +116,22 @@ define('forum/account/header', [
 	}
 
 	function toggleFollow(type) {
-		socket.emit('user.' + type, {
-			uid: ajaxify.data.uid,
-		}, function (err) {
+		api[type === 'follow' ? 'put' : 'del']('/users/' + ajaxify.data.uid + '/follow', undefined, function (err) {
 			if (err) {
-				return app.alertError(err.message);
+				return app.alertError(err);
 			}
-
 			components.get('account/follow').toggleClass('hide', type === 'follow');
 			components.get('account/unfollow').toggleClass('hide', type === 'unfollow');
 			app.alertSuccess('[[global:alert.' + type + ', ' + ajaxify.data.username + ']]');
 		});
+
 		return false;
 	}
 
-	function banAccount() {
-		Benchpress.parse('admin/partials/temporary-ban', {}, function (html) {
+	function banAccount(theirid, onSuccess) {
+		theirid = theirid || ajaxify.data.theirid;
+
+		Benchpress.render('admin/partials/temporary-ban', {}).then(function (html) {
 			bootbox.dialog({
 				className: 'ban-modal',
 				title: '[[user:ban_account]]',
@@ -137,18 +150,20 @@ define('forum/account/header', [
 								return data;
 							}, {});
 
-							var until = formData.length > 0 ? (Date.now() + (formData.length * 1000 * 60 * 60 * (parseInt(formData.unit, 10) ? 24 : 1))) : 0;
+							var until = formData.length > 0 ? (
+								Date.now() + (formData.length * 1000 * 60 * 60 * (parseInt(formData.unit, 10) ? 24 : 1))
+							) : 0;
 
-							socket.emit('user.banUsers', {
-								uids: [ajaxify.data.theirid],
+							api.put('/users/' + theirid + '/ban', {
 								until: until,
 								reason: formData.reason || '',
-							}, function (err) {
-								if (err) {
-									return app.alertError(err.message);
+							}).then(() => {
+								if (typeof onSuccess === 'function') {
+									return onSuccess();
 								}
+
 								ajaxify.refresh();
-							});
+							}).catch(app.alertError);
 						},
 					},
 				},
@@ -157,30 +172,9 @@ define('forum/account/header', [
 	}
 
 	function unbanAccount() {
-		socket.emit('user.unbanUsers', [ajaxify.data.theirid], function (err) {
-			if (err) {
-				return app.alertError(err.message);
-			}
+		api.del('/users/' + ajaxify.data.theirid + '/ban').then(() => {
 			ajaxify.refresh();
-		});
-	}
-
-	function deleteAccount() {
-		translator.translate('[[user:delete_this_account_confirm]]', function (translated) {
-			bootbox.confirm(translated, function (confirm) {
-				if (!confirm) {
-					return;
-				}
-
-				socket.emit('admin.user.deleteUsersAndContent', [ajaxify.data.theirid], function (err) {
-					if (err) {
-						return app.alertError(err.message);
-					}
-					app.alertSuccess('[[user:account-deleted]]');
-					history.back();
-				});
-			});
-		});
+		}).catch(app.alertError);
 	}
 
 	function flagAccount() {

@@ -1,106 +1,94 @@
 'use strict';
 
 
-define('notifications', ['sounds', 'translator', 'components', 'navigator', 'benchpress'], function (sounds, translator, components, navigator, Benchpress) {
+define('notifications', [
+	'translator',
+	'components',
+	'navigator',
+	'benchpress',
+	'tinycon',
+	'hooks',
+], function (translator, components, navigator, Benchpress, Tinycon, hooks) {
 	var Notifications = {};
 
 	var unreadNotifs = {};
 
-	Notifications.prepareDOM = function () {
-		var notifContainer = components.get('notifications');
-		var notifTrigger = notifContainer.children('a');
-		var notifList = components.get('notifications/list');
-		var notifDropdownWrapper = notifTrigger.parents('.dropdown');
+	const _addShortTimeagoString = ({ notifications: notifs }) => new Promise((resolve) => {
+		translator.toggleTimeagoShorthand(function () {
+			for (var i = 0; i < notifs.length; i += 1) {
+				notifs[i].timeago = $.timeago(new Date(parseInt(notifs[i].datetime, 10)));
+			}
+			translator.toggleTimeagoShorthand();
+			resolve({ notifications: notifs });
+		});
+	});
+	hooks.on('filter:notifications.load', _addShortTimeagoString);
 
-		notifTrigger.on('click', function (e) {
-			e.preventDefault();
-			if (notifContainer.hasClass('open')) {
-				return;
+	Notifications.loadNotifications = function (notifList) {
+		socket.emit('notifications.get', null, function (err, data) {
+			if (err) {
+				return app.alertError(err.message);
 			}
 
-			Notifications.loadNotifications(notifList);
-		});
+			var notifs = data.unread.concat(data.read).sort(function (a, b) {
+				return parseInt(a.datetime, 10) > parseInt(b.datetime, 10) ? -1 : 1;
+			});
 
-		if (notifDropdownWrapper.hasClass('open')) {
-			Notifications.loadNotifications(notifList);
+			hooks.fire('filter:notifications.load', { notifications: notifs }).then(({ notifications }) => {
+				app.parseAndTranslate('partials/notifications_list', { notifications }, function (html) {
+					notifList.html(html);
+					notifList.off('click').on('click', '[data-nid]', function (ev) {
+						var notifEl = $(this);
+						if (scrollToPostIndexIfOnPage(notifEl)) {
+							ev.stopPropagation();
+							ev.preventDefault();
+							components.get('notifications/list').dropdown('toggle');
+						}
+
+						var unread = notifEl.hasClass('unread');
+						if (!unread) {
+							return;
+						}
+						var nid = notifEl.attr('data-nid');
+						markNotification(nid, true);
+					});
+					components.get('notifications').on('click', '.mark-all-read', Notifications.markAllRead);
+
+					notifList.on('click', '.mark-read', function () {
+						var liEl = $(this).parent();
+						var unread = liEl.hasClass('unread');
+						var nid = liEl.attr('data-nid');
+						markNotification(nid, unread, function () {
+							liEl.toggleClass('unread');
+						});
+						return false;
+					});
+
+					hooks.fire('action:notifications.loaded', {
+						notifications: notifs,
+						list: notifList,
+					});
+				});
+			});
+		});
+	};
+
+	Notifications.onNewNotification = function (notifData) {
+		if (ajaxify.currentPage === 'notifications') {
+			ajaxify.refresh();
 		}
 
-		notifList.on('click', '[data-nid]', function (ev) {
-			var notifEl = $(this);
-			if (scrollToPostIndexIfOnPage(notifEl)) {
-				ev.stopPropagation();
-				ev.preventDefault();
-				notifTrigger.dropdown('toggle');
+		socket.emit('notifications.getCount', function (err, count) {
+			if (err) {
+				return app.alertError(err.message);
 			}
 
-			var unread = notifEl.hasClass('unread');
-			if (!unread) {
-				return;
-			}
-			var nid = notifEl.attr('data-nid');
-			markNotification(nid, true);
-		});
-
-		notifContainer.on('click', '.mark-all-read', Notifications.markAllRead);
-
-		notifList.on('click', '.mark-read', function () {
-			var liEl = $(this).parent();
-			var unread = liEl.hasClass('unread');
-			var nid = liEl.attr('data-nid');
-			markNotification(nid, unread, function () {
-				liEl.toggleClass('unread');
-			});
-			return false;
-		});
-
-		socket.on('event:new_notification', function (notifData) {
-			// If a path is defined, show notif data, otherwise show generic data
-			var payload = {
-				alert_id: 'new_notif',
-				title: '[[notifications:new_notification]]',
-				timeout: parseInt(config.notificationAlertTimeout, 10) || 5000,
-			};
-
-			if (notifData.path) {
-				payload.message = notifData.bodyShort;
-				payload.type = 'info';
-				payload.clickfn = function () {
-					markNotification(notifData.nid, true);
-					if (notifData.path.startsWith('http') || notifData.path.startsWith('https')) {
-						window.location.href = notifData.path;
-					} else {
-						window.location.href = window.location.protocol + '//' + window.location.host + config.relative_path + notifData.path;
-					}
-				};
-			} else {
-				payload.message = '[[notifications:you_have_unread_notifications]]';
-				payload.type = 'warning';
-			}
-
-			app.alert(payload);
-			app.refreshTitle();
-
-			if (ajaxify.currentPage === 'notifications') {
-				ajaxify.refresh();
-			}
-
-			socket.emit('notifications.getCount', function (err, count) {
-				if (err) {
-					return app.alertError(err.message);
-				}
-
-				Notifications.updateNotifCount(count);
-			});
-
-			if (!unreadNotifs[notifData.nid]) {
-				sounds.play('notification', notifData.nid);
-				unreadNotifs[notifData.nid] = true;
-			}
-		});
-
-		socket.on('event:notifications.updateCount', function (count) {
 			Notifications.updateNotifCount(count);
 		});
+
+		if (!unreadNotifs[notifData.nid]) {
+			unreadNotifs[notifData.nid] = true;
+		}
 	};
 
 	function markNotification(nid, read, callback) {
@@ -130,28 +118,6 @@ define('notifications', ['sounds', 'translator', 'components', 'navigator', 'ben
 		return false;
 	}
 
-	Notifications.loadNotifications = function (notifList) {
-		socket.emit('notifications.get', null, function (err, data) {
-			if (err) {
-				return app.alertError(err.message);
-			}
-
-			var notifs = data.unread.concat(data.read).sort(function (a, b) {
-				return parseInt(a.datetime, 10) > parseInt(b.datetime, 10) ? -1 : 1;
-			});
-
-			translator.toggleTimeagoShorthand(function () {
-				for (var i = 0; i < notifs.length; i += 1) {
-					notifs[i].timeago = $.timeago(new Date(parseInt(notifs[i].datetime, 10)));
-				}
-				translator.toggleTimeagoShorthand();
-				Benchpress.parse('partials/notifications_list', { notifications: notifs }, function (html) {
-					notifList.translateHtml(html);
-				});
-			});
-		});
-	};
-
 	Notifications.updateNotifCount = function (count) {
 		var notifIcon = components.get('notifications/icon');
 		count = Math.max(0, count);
@@ -168,7 +134,7 @@ define('notifications', ['sounds', 'translator', 'components', 'navigator', 'ben
 			count: count,
 			updateFavicon: true,
 		};
-		$(window).trigger('action:notification.updateCount', payload);
+		hooks.fire('action:notification.updateCount', payload);
 
 		if (payload.updateFavicon) {
 			Tinycon.setBubble(count > 99 ? '99+' : count);

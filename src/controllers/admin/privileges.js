@@ -1,39 +1,51 @@
 'use strict';
 
-var async = require('async');
+const categories = require('../../categories');
+const privileges = require('../../privileges');
 
-var categories = require('../../categories');
-var privileges = require('../../privileges');
+const privilegesController = module.exports;
 
-var privilegesController = module.exports;
+privilegesController.get = async function (req, res) {
+	const cid = req.params.cid ? parseInt(req.params.cid, 10) || 0 : 0;
+	const isAdminPriv = req.params.cid === 'admin';
 
-privilegesController.get = function (req, res, callback) {
-	var cid = req.params.cid ? req.params.cid : 0;
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				privileges: function (next) {
-					if (!cid) {
-						privileges.global.list(next);
-					} else {
-						privileges.categories.list(cid, next);
-					}
-				},
-				allCategories: async.apply(categories.buildForSelect, req.uid, 'read'),
-			}, next);
-		},
-		function (data) {
-			data.allCategories.forEach(function (category) {
-				if (category) {
-					category.selected = parseInt(category.cid, 10) === parseInt(cid, 10);
-				}
-			});
+	let privilegesData;
+	if (cid > 0) {
+		privilegesData = await privileges.categories.list(cid);
+	} else if (cid === 0) {
+		privilegesData = await (isAdminPriv ? privileges.admin.list(req.uid) : privileges.global.list());
+	}
 
-			res.render('admin/manage/privileges', {
-				privileges: data.privileges,
-				allCategories: data.allCategories,
-				cid: cid,
-			});
-		},
-	], callback);
+	const categoriesData = [{
+		cid: 0,
+		name: '[[admin/manage/privileges:global]]',
+		icon: 'fa-list',
+	}, {
+		cid: 'admin',	// what do?
+		name: '[[admin/manage/privileges:admin]]',
+		icon: 'fa-lock',
+	}];
+
+	let selectedCategory;
+	categoriesData.forEach((category) => {
+		if (category) {
+			category.selected = category.cid === (!isAdminPriv ? cid : 'admin');
+
+			if (category.selected) {
+				selectedCategory = category;
+			}
+		}
+	});
+	if (!selectedCategory) {
+		selectedCategory = await categories.getCategoryFields(cid, ['cid', 'name', 'icon', 'bgColor', 'color']);
+	}
+
+	const group = req.query.group ? req.query.group : '';
+	res.render('admin/manage/privileges', {
+		privileges: privilegesData,
+		categories: categoriesData,
+		selectedCategory: selectedCategory,
+		cid: cid,
+		group: group,
+	});
 };

@@ -22,6 +22,8 @@
 	"smtp-transport.username": "Uživatelské jméno",
 	"smtp-transport.username-help": "<b>Pro službu Gmail,</b> zadejte plnou e-mailovou adresu, zvláště, používáte-li spravovanou doménu Google Apps.",
 	"smtp-transport.password": "Heslo",
+	"smtp-transport.pool": "Enable pooled connections",
+	"smtp-transport.pool-help": "Pooling connections prevents NodeBB from creating a new connection for every email. This option only applies if SMTP Transport is enabled.",
 
 	"template": "Upravit šablonu e-mailu",
 	"template.select": "Vybrat šablonu e-mailu",
@@ -30,8 +32,11 @@
 	"testing.select": "Vyberte šablonu e-mailu",
 	"testing.send": "Odeslat testovací e-mail",
 	"testing.send-help": "Testovací e-mail bude odeslán aktuálně přihlášenému uživateli na jeho e-mailovou adresu z registrace.",
-	"subscriptions": "Přihlášení e-mailu k  odběru",
-	"subscriptions.disable": "Zakázat oznamovací e-maily přihlášeným k odběru",
+	"subscriptions": "E-mailové odběry",
+	"subscriptions.disable": "Zakázat e-mailové odběry",
 	"subscriptions.hour": "Hodina přehledu",
-	"subscriptions.hour-help": "Zadejte číslo odpovídající hodině, kdy mají být odeslány přehledové e-maily (tj. <code>0</code> pro půlnoc, <code>17</code> pro 5:00pm).  Mějte na paměti, že tato hodina závisí na hodinách samotného serveru a nemusí tak souhlasit se systémovými hodinami. <br />Přibližný čas serveru je: <span id=\"serverTime\"></span>.<br />Další odeslání přehledů je plánováno na <span id=\"nextDigestTime\"></span>."
+	"subscriptions.hour-help": "Zadejte číslo odpovídající hodině, kdy mají být odeslány přehledové e-maily (tj. <code>0</code> pro půlnoc, <code>17</code> pro 5:00pm).  Mějte na paměti, že tato hodina závisí na hodinách samotného serveru a nemusí tak souhlasit se systémovými hodinami. <br />Přibližný čas serveru je: <span id=\"serverTime\"></span>.<br />Další odeslání přehledů je plánováno na <span id=\"nextDigestTime\"></span>.",
+	"notifications.remove-images": "Remove images from email notifications",
+	"include-unverified-emails": "Send emails to recipients who have not explicitly confirmed their emails",
+	"include-unverified-warning": "By default, users with emails associated with their account have already been verified, but there are situations where this is not the case (e.g. SSO logins, grandfathered users, etc). <strong>Enable this setting at your own risk</strong> &ndash; sending emails to unverified addresses may be a violation of regional anti-spam laws."
 }

@@ -22,6 +22,8 @@
 	"smtp-transport.username": "Username",
 	"smtp-transport.username-help": "<b>For the Gmail service,</b> enter the full email address here, especially if you are using a Google Apps managed domain.",
 	"smtp-transport.password": "Password",
+	"smtp-transport.pool": "Enable pooled connections",
+	"smtp-transport.pool-help": "Pooling connections prevents NodeBB from creating a new connection for every email. This option only applies if SMTP Transport is enabled.",
 
 	"template": "電子メールテンプレートの編集",
 	"template.select": "電子メールテンプレートを選択",
@@ -30,8 +32,11 @@
 	"testing.select": "電子メールテンプレートを選択",
 	"testing.send": "テスト電子メールを送信する",
 	"testing.send-help": "テスト電子メールは、現在ログインしているユーザーの電子メールアドレスに送信されます。",
-	"subscriptions": "メール購読",
-	"subscriptions.disable": "購読者の通知メールを無効にする",
+	"subscriptions": "Email Digests",
+	"subscriptions.disable": "Disable email digests",
 	"subscriptions.hour": "ダイジェストアワー",
-	"subscriptions.hour-help": "スケジュールされたメールのダイジェストを送信する時間を表す数字を入力してください(深夜は<code>0</ code>、午後5:00は<code>17</code>)これはサーバー自体に基づく時間であり、システムの時計と正確に一致しない場合があります。<span id=\"serverTime\"></ span> <br />次の日のダイジェストは<span id=\"nextDigestTime\"></span>"
+	"subscriptions.hour-help": "スケジュールされたメールのダイジェストを送信する時間を表す数字を入力してください(深夜は<code>0</ code>、午後5:00は<code>17</code>)これはサーバー自体に基づく時間であり、システムの時計と正確に一致しない場合があります。<span id=\"serverTime\"></ span> <br />次の日のダイジェストは<span id=\"nextDigestTime\"></span>",
+	"notifications.remove-images": "Remove images from email notifications",
+	"include-unverified-emails": "Send emails to recipients who have not explicitly confirmed their emails",
+	"include-unverified-warning": "By default, users with emails associated with their account have already been verified, but there are situations where this is not the case (e.g. SSO logins, grandfathered users, etc). <strong>Enable this setting at your own risk</strong> &ndash; sending emails to unverified addresses may be a violation of regional anti-spam laws."
 }

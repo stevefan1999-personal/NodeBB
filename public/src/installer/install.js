@@ -1,5 +1,6 @@
 'use strict';
 
+/* global zxcvbn, slugify */
 
 $('document').ready(function () {
 	setupInputs();
@@ -60,7 +61,7 @@ $('document').ready(function () {
 		var help = parent.children('.help-text');
 
 		function validateUsername(field) {
-			if (!utils.isUserNameValid(field) || !utils.slugify(field)) {
+			if (!utils.isUserNameValid(field) || !slugify(field)) {
 				parent.addClass('error');
 				help.html('Invalid Username.');
 			} else {
@@ -75,6 +76,9 @@ $('document').ready(function () {
 			} else if (field.length < $('[name="admin:password"]').attr('data-minimum-length')) {
 				parent.addClass('error');
 				help.html('Password is too short.');
+			} else if (zxcvbn(field).score < parseInt($('[name="admin:password"]').attr('data-minimum-strength'), 10)) {
+				parent.addClass('error');
+				help.html('Password is too weak.');
 			} else {
 				parent.removeClass('error');
 			}
@@ -103,16 +107,16 @@ $('document').ready(function () {
 		}
 
 		switch (type) {
-		case 'admin:username':
-			return validateUsername(field);
-		case 'admin:password':
-			return validatePassword(field);
-		case 'admin:passwordConfirm':
-			return validateConfirmPassword(field);
-		case 'admin:email':
-			return validateEmail(field);
-		case 'database':
-			return switchDatabase(field);
+			case 'admin:username':
+				return validateUsername(field);
+			case 'admin:password':
+				return validatePassword(field);
+			case 'admin:passwordConfirm':
+				return validateConfirmPassword(field);
+			case 'admin:email':
+				return validateEmail(field);
+			case 'database':
+				return switchDatabase(field);
 		}
 	}
 

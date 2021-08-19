@@ -1,28 +1,31 @@
 'use strict';
 
-var nconf = require('nconf');
-var winston = require('winston');
-var path = require('path');
-var async = require('async');
-var express = require('express');
+const nconf = require('nconf');
+const winston = require('winston');
+const path = require('path');
+const express = require('express');
 
-var meta = require('../meta');
-var controllers = require('../controllers');
-var plugins = require('../plugins');
-var user = require('../user');
+const meta = require('../meta');
+const controllers = require('../controllers');
+const controllerHelpers = require('../controllers/helpers');
+const plugins = require('../plugins');
 
-var accountRoutes = require('./accounts');
-var metaRoutes = require('./meta');
-var apiRoutes = require('./api');
-var adminRoutes = require('./admin');
-var feedRoutes = require('./feeds');
-var authRoutes = require('./authentication');
-var helpers = require('./helpers');
+const authRoutes = require('./authentication');
+const writeRoutes = require('./write');
+const helpers = require('./helpers');
 
-var setupPageRoute = helpers.setupPageRoute;
+const { setupPageRoute } = helpers;
 
-function mainRoutes(app, middleware, controllers) {
-	var loginRegisterMiddleware = [middleware.redirectToAccountIfLoggedIn];
+const _mounts = {
+	user: require('./user'),
+	meta: require('./meta'),
+	api: require('./api'),
+	admin: require('./admin'),
+	feed: require('./feeds'),
+};
+
+_mounts.main = (app, middleware, controllers) => {
+	const loginRegisterMiddleware = [middleware.redirectToAccountIfLoggedIn];
 
 	setupPageRoute(app, '/login', middleware, loginRegisterMiddleware, controllers.login);
 	setupPageRoute(app, '/register', middleware, loginRegisterMiddleware, controllers.register);
@@ -34,118 +37,125 @@ function mainRoutes(app, middleware, controllers) {
 	setupPageRoute(app, '/reset/:code?', middleware, [middleware.delayLoading], controllers.reset);
 	setupPageRoute(app, '/tos', middleware, [], controllers.termsOfUse);
 
-	app.post('/compose', middleware.applyCSRF, controllers.composer.post);
-}
+	setupPageRoute(app, '/email/unsubscribe/:token', middleware, [], controllers.accounts.settings.unsubscribe);
+	app.post('/email/unsubscribe/:token', controllers.accounts.settings.unsubscribePost);
 
-function modRoutes(app, middleware, controllers) {
+	app.post('/compose', middleware.applyCSRF, controllers.composer.post);
+};
+
+_mounts.mod = (app, middleware, controllers) => {
 	setupPageRoute(app, '/flags', middleware, [], controllers.mods.flags.list);
 	setupPageRoute(app, '/flags/:flagId', middleware, [], controllers.mods.flags.detail);
 	setupPageRoute(app, '/post-queue', middleware, [], controllers.mods.postQueue);
-}
+};
 
-function globalModRoutes(app, middleware, controllers) {
+_mounts.globalMod = (app, middleware, controllers) => {
 	setupPageRoute(app, '/ip-blacklist', middleware, [], controllers.globalMods.ipBlacklist);
-}
+	setupPageRoute(app, '/registration-queue', middleware, [], controllers.globalMods.registrationQueue);
+};
 
-function topicRoutes(app, middleware, controllers) {
-	setupPageRoute(app, '/topic/:topic_id/:slug/:post_index?', middleware, [], controllers.topics.get);
-	setupPageRoute(app, '/topic/:topic_id/:slug?', middleware, [], controllers.topics.get);
-}
+_mounts.topic = (app, name, middleware, controllers) => {
+	setupPageRoute(app, `/${name}/:topic_id/:slug/:post_index?`, middleware, [], controllers.topics.get);
+	setupPageRoute(app, `/${name}/:topic_id/:slug?`, middleware, [], controllers.topics.get);
+};
 
-function postRoutes(app, middleware, controllers) {
-	setupPageRoute(app, '/post/:pid', middleware, [], controllers.posts.redirectToPost);
-}
+_mounts.post = (app, name, middleware, controllers) => {
+	const middlewares = [middleware.maintenanceMode, middleware.registrationComplete, middleware.pluginHooks];
+	app.get(`/${name}/:pid`, middleware.busyCheck, middlewares, controllers.posts.redirectToPost);
+	app.get(`/api/${name}/:pid`, middlewares, controllers.posts.redirectToPost);
+};
 
-function tagRoutes(app, middleware, controllers) {
-	setupPageRoute(app, '/tags/:tag', middleware, [middleware.privateTagListing], controllers.tags.getTag);
-	setupPageRoute(app, '/tags', middleware, [middleware.privateTagListing], controllers.tags.getTags);
-}
+_mounts.tags = (app, name, middleware, controllers) => {
+	setupPageRoute(app, `/${name}/:tag`, middleware, [middleware.privateTagListing], controllers.tags.getTag);
+	setupPageRoute(app, `/${name}`, middleware, [middleware.privateTagListing], controllers.tags.getTags);
+};
 
-function categoryRoutes(app, middleware, controllers) {
+_mounts.category = (app, name, middleware, controllers) => {
 	setupPageRoute(app, '/categories', middleware, [], controllers.categories.list);
 	setupPageRoute(app, '/popular', middleware, [], controllers.popular.get);
 	setupPageRoute(app, '/recent', middleware, [], controllers.recent.get);
 	setupPageRoute(app, '/top', middleware, [], controllers.top.get);
-	setupPageRoute(app, '/unread', middleware, [middleware.authenticate], controllers.unread.get);
+	setupPageRoute(app, '/unread', middleware, [middleware.ensureLoggedIn], controllers.unread.get);
 
-	setupPageRoute(app, '/category/:category_id/:slug/:topic_index', middleware, [], controllers.category.get);
-	setupPageRoute(app, '/category/:category_id/:slug?', middleware, [], controllers.category.get);
-}
+	setupPageRoute(app, `/${name}/:category_id/:slug/:topic_index`, middleware, [], controllers.category.get);
+	setupPageRoute(app, `/${name}/:category_id/:slug?`, middleware, [], controllers.category.get);
+};
 
-function userRoutes(app, middleware, controllers) {
-	var middlewares = [middleware.checkGlobalPrivacySettings];
+_mounts.users = (app, name, middleware, controllers) => {
+	const middlewares = [middleware.canViewUsers];
 
-	setupPageRoute(app, '/users', middleware, middlewares, controllers.users.index);
-}
+	setupPageRoute(app, `/${name}`, middleware, middlewares, controllers.users.index);
+};
 
-function groupRoutes(app, middleware, controllers) {
-	var middlewares = [middleware.checkGlobalPrivacySettings];
+_mounts.groups = (app, name, middleware, controllers) => {
+	const middlewares = [middleware.canViewGroups];
 
-	setupPageRoute(app, '/groups', middleware, middlewares, controllers.groups.list);
-	setupPageRoute(app, '/groups/:slug', middleware, middlewares, controllers.groups.details);
-	setupPageRoute(app, '/groups/:slug/members', middleware, middlewares, controllers.groups.members);
-}
+	setupPageRoute(app, `/${name}`, middleware, middlewares, controllers.groups.list);
+	setupPageRoute(app, `/${name}/:slug`, middleware, middlewares, controllers.groups.details);
+	setupPageRoute(app, `/${name}/:slug/members`, middleware, middlewares, controllers.groups.members);
+};
 
-module.exports = function (app, middleware, hotswapIds, callback) {
-	var routers = [
-		express.Router(),	// plugin router
-		express.Router(),	// main app router
-		express.Router(),	// auth router
-	];
-	var router = routers[1];
-	var pluginRouter = routers[0];
-	var authRouter = routers[2];
-	var relativePath = nconf.get('relative_path');
-	var ensureLoggedIn = require('connect-ensure-login');
-
-	var idx;
-	var x;
-
-	if (Array.isArray(hotswapIds) && hotswapIds.length) {
-		for (x = 0; x < hotswapIds.length; x += 1) {
-			idx = routers.push(express.Router()) - 1;
-			routers[idx].hotswapId = hotswapIds[x];
-		}
-	}
-
-	pluginRouter.render = function () {
-		app.render.apply(app, arguments);
+module.exports = async function (app, middleware) {
+	const router = express.Router();
+	router.render = function (...args) {
+		app.render(...args);
 	};
 
-	// Set-up for hotswapping (when NodeBB reloads)
-	pluginRouter.hotswapId = 'plugins';
-	authRouter.hotswapId = 'auth';
+	// Allow plugins/themes to mount some routes elsewhere
+	const remountable = ['admin', 'category', 'topic', 'post', 'users', 'user', 'groups', 'tags'];
+	const { mounts } = await plugins.hooks.fire('filter:router.add', {
+		mounts: remountable.reduce((memo, mount) => {
+			memo[mount] = mount;
+			return memo;
+		}, {}),
+	});
+	// Guard against plugins sending back missing/extra mounts
+	Object.keys(mounts).forEach((mount) => {
+		if (!remountable.includes(mount)) {
+			delete mounts[mount];
+		} else if (typeof mount !== 'string') {
+			mounts[mount] = mount;
+		}
+	});
+	remountable.forEach((mount) => {
+		if (!mounts.hasOwnProperty(mount)) {
+			mounts[mount] = mount;
+		}
+	});
 
-	app.all(relativePath + '(/+api|/+api/*?)', middleware.prepareAPI);
-	app.all(relativePath + '(/+api/admin|/+api/admin/*?)', middleware.isAdmin);
-	app.all(relativePath + '(/+admin|/+admin/*?)', ensureLoggedIn.ensureLoggedIn(nconf.get('relative_path') + '/login?local=1'), middleware.applyCSRF, middleware.isAdmin);
+	router.all('(/+api|/+api/*?)', middleware.prepareAPI);
+	router.all(`(/+api/admin|/+api/admin/*?${mounts.admin !== 'admin' ? `|/+api/${mounts.admin}|/+api/${mounts.admin}/*?` : ''})`, middleware.authenticateRequest, middleware.ensureLoggedIn, middleware.admin.checkPrivileges);
+	router.all(`(/+admin|/+admin/*?${mounts.admin !== 'admin' ? `|/+${mounts.admin}|/+${mounts.admin}/*?` : ''})`, middleware.ensureLoggedIn, middleware.applyCSRF, middleware.admin.checkPrivileges);
 
 	app.use(middleware.stripLeadingSlashes);
 
 	// handle custom homepage routes
-	app.use(relativePath, controllers.home.rewrite);
+	router.use('/', controllers.home.rewrite);
+
 	// homepage handled by `action:homepage.get:[route]`
-	setupPageRoute(app, '/', middleware, [], controllers.home.pluginHook);
+	setupPageRoute(router, '/', middleware, [], controllers.home.pluginHook);
 
-	adminRoutes(router, middleware, controllers);
-	metaRoutes(router, middleware, controllers);
-	apiRoutes(router, middleware, controllers);
-	feedRoutes(router, middleware, controllers);
+	await plugins.reloadRoutes({ router: router });
+	await authRoutes.reloadRoutes({ router: router });
+	await writeRoutes.reload({ router: router });
+	addCoreRoutes(app, router, middleware, mounts);
 
-	mainRoutes(router, middleware, controllers);
-	topicRoutes(router, middleware, controllers);
-	postRoutes(router, middleware, controllers);
-	modRoutes(router, middleware, controllers);
-	globalModRoutes(router, middleware, controllers);
-	tagRoutes(router, middleware, controllers);
-	categoryRoutes(router, middleware, controllers);
-	accountRoutes(router, middleware, controllers);
-	userRoutes(router, middleware, controllers);
-	groupRoutes(router, middleware, controllers);
+	winston.info('[router] Routes added');
+};
 
-	for (x = 0; x < routers.length; x += 1) {
-		app.use(relativePath || '/', routers[x]);
-	}
+function addCoreRoutes(app, router, middleware, mounts) {
+	_mounts.meta(router, middleware, controllers);
+	_mounts.api(router, middleware, controllers);
+	_mounts.feed(router, middleware, controllers);
+
+	_mounts.main(router, middleware, controllers);
+	_mounts.mod(router, middleware, controllers);
+	_mounts.globalMod(router, middleware, controllers);
+
+	addRemountableRoutes(app, router, middleware, mounts);
+
+	const relativePath = nconf.get('relative_path');
+	app.use(relativePath || '/', router);
 
 	if (process.env.NODE_ENV === 'development') {
 		require('./debug')(app, middleware, controllers);
@@ -153,12 +163,12 @@ module.exports = function (app, middleware, hotswapIds, callback) {
 
 	app.use(middleware.privateUploads);
 
-	var statics = [
+	const statics = [
 		{ route: '/assets', path: path.join(__dirname, '../../build/public') },
 		{ route: '/assets', path: path.join(__dirname, '../../public') },
 		{ route: '/plugins', path: path.join(__dirname, '../../build/public/plugins') },
 	];
-	var staticOptions = {
+	const staticOptions = {
 		maxAge: app.enabled('cache') ? 5184000000 : 0,
 	};
 
@@ -166,69 +176,41 @@ module.exports = function (app, middleware, hotswapIds, callback) {
 		statics.unshift({ route: '/assets/uploads', path: nconf.get('upload_path') });
 	}
 
-	statics.forEach(function (obj) {
-		app.use(relativePath + obj.route, express.static(obj.path, staticOptions));
+	statics.forEach((obj) => {
+		app.use(relativePath + obj.route, middleware.trimUploadTimestamps, express.static(obj.path, staticOptions));
 	});
-	app.use(relativePath + '/uploads', function (req, res) {
-		res.redirect(relativePath + '/assets/uploads' + req.path + '?' + meta.config['cache-buster']);
-	});
-
-	// only warn once
-	var warned = new Set();
-
-	// DEPRECATED
-	var deprecatedPaths = [
-		'/nodebb.min.js',
-		'/acp.min.js',
-		'/stylesheet.css',
-		'/js-enabled.css',
-		'/admin.css',
-		'/logo.png',
-		'/favicon.ico',
-		'/vendor/',
-		'/templates/',
-		'/src/',
-		'/images/',
-		'/language/',
-		'/sounds/',
-	];
-	app.use(relativePath, function (req, res, next) {
-		if (deprecatedPaths.some(function (path) { return req.path.startsWith(path); })) {
-			if (!warned.has(req.path)) {
-				winston.warn('[deprecated] Accessing `' + req.path.slice(1) + '` from `/` is deprecated to be REMOVED in NodeBB v1.7.0. ' +
-				'Use `/assets' + req.path + '` to access this file.');
-				warned.add(req.path);
-			}
-			res.redirect(relativePath + '/assets' + req.path + '?' + meta.config['cache-buster']);
-		} else {
-			next();
-		}
-	});
-	// DEPRECATED
-	app.use(relativePath + '/api/language', function (req, res) {
-		if (!warned.has(req.path)) {
-			winston.warn('[deprecated] Accessing language files from `/api/language` is deprecated to be REMOVED in NodeBB v1.7.0. ' +
-			'Use `/assets/language' + req.path + '.json` for prefetch paths.');
-			warned.add(req.path);
-		}
-		res.redirect(relativePath + '/assets/language' + req.path + '.json?' + meta.config['cache-buster']);
+	app.use(`${relativePath}/uploads`, (req, res) => {
+		res.redirect(`${relativePath}/assets/uploads${req.path}?${meta.config['cache-buster']}`);
 	});
 
-	app.use(relativePath + '/assets/vendor/jquery/timeago/locales', middleware.processTimeagoLocales);
+	// Skins
+	meta.css.supportedSkins.forEach((skin) => {
+		app.use(`${relativePath}/assets/client-${skin}.css`, middleware.buildSkinAsset);
+	});
+
 	app.use(controllers['404'].handle404);
 	app.use(controllers.errors.handleURIErrors);
 	app.use(controllers.errors.handleErrors);
+}
 
-	// Add plugin routes
-	async.series([
-		async.apply(plugins.reloadRoutes),
-		async.apply(authRoutes.reloadRoutes),
-		async.apply(user.addInterstitials),
-		function (next) {
-			winston.info('Routes added');
-			next();
-		},
-	], function (err) {
-		callback(err);
+function addRemountableRoutes(app, router, middleware, mounts) {
+	Object.keys(mounts).map(async (mount) => {
+		const original = mount;
+		mount = mounts[original];
+
+		if (!mount) {	// do not mount at all
+			winston.warn(`[router] Not mounting /${original}`);
+			return;
+		}
+
+		if (mount !== original) {
+			// Set up redirect for fallback handling (some js/tpls may still refer to the traditional mount point)
+			winston.info(`[router] /${original} prefix re-mounted to /${mount}. Requests to /${original}/* will now redirect to /${mount}`);
+			router.use(new RegExp(`/(api/)?${original}`), (req, res) => {
+				controllerHelpers.redirect(res, `${nconf.get('relative_path')}/${mount}${req.path}`);
+			});
+		}
+
+		_mounts[original](router, mount, middleware, controllers);
 	});
-};
+}

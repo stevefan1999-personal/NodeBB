@@ -1,49 +1,39 @@
 'use strict';
 
-var async = require('async');
+const querystring = require('querystring');
 
-var posts = require('../posts');
-var privileges = require('../privileges');
-var helpers = require('./helpers');
+const posts = require('../posts');
+const privileges = require('../privileges');
+const helpers = require('./helpers');
 
-var postsController = module.exports;
+const postsController = module.exports;
 
-postsController.redirectToPost = function (req, res, next) {
-	var pid = parseInt(req.params.pid, 10);
+postsController.redirectToPost = async function (req, res, next) {
+	const pid = parseInt(req.params.pid, 10);
 	if (!pid) {
 		return next();
 	}
 
-	async.waterfall([
-		function (next) {
-			async.parallel({
-				canRead: function (next) {
-					privileges.posts.can('read', pid, req.uid, next);
-				},
-				path: function (next) {
-					posts.generatePostPath(pid, req.uid, next);
-				},
-			}, next);
-		},
-		function (results, next) {
-			if (!results.path) {
-				return next();
-			}
-			if (!results.canRead) {
-				return helpers.notAllowed(req, res);
-			}
-			helpers.redirect(res, results.path);
-		},
-	], next);
+	const [canRead, path] = await Promise.all([
+		privileges.posts.can('topics:read', pid, req.uid),
+		posts.generatePostPath(pid, req.uid),
+	]);
+	if (!path) {
+		return next();
+	}
+	if (!canRead) {
+		return helpers.notAllowed(req, res);
+	}
+
+	const qs = querystring.stringify(req.query);
+	helpers.redirect(res, qs ? `${path}?${qs}` : path);
 };
 
-postsController.getRecentPosts = function (req, res, next) {
-	async.waterfall([
-		function (next) {
-			posts.getRecentPosts(req.uid, 0, 19, req.params.term, next);
-		},
-		function (data) {
-			res.json(data);
-		},
-	], next);
+postsController.getRecentPosts = async function (req, res) {
+	const page = parseInt(req.query.page, 10) || 1;
+	const postsPerPage = 20;
+	const start = Math.max(0, (page - 1) * postsPerPage);
+	const stop = start + postsPerPage - 1;
+	const data = await posts.getRecentPosts(req.uid, start, stop, req.params.term);
+	res.json(data);
 };

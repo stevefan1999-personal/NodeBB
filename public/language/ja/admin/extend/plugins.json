@@ -1,4 +1,5 @@
 {
+	"trending": "Trending",
 	"installed": "インストール済み",
 	"active": "アクティブ",
 	"inactive": "非アクティブ",
@@ -9,6 +10,7 @@
 
 	"plugin-search": "プラグインの検索",
 	"plugin-search-placeholder": "プラグインを検索します...",
+	"submit-anonymous-usage": "Submit anonymous plugin usage data.",
 	"reorder-plugins": "プラグインの並び替え",
 	"order-active": "アクティブなプラグインの並び替え",
 	"dev-interested": "NodeBBのプラグインの作成に興味がありますか？",
@@ -29,13 +31,15 @@
 	"plugin-item.more-info": "より詳細な情報:",
 	"plugin-item.unknown": "不明",
 	"plugin-item.unknown-explanation": "このプラグインの状態を判断できませんでした。設定にミスがある可能性があります。",
+	"plugin-item.compatible": "This plugin works on NodeBB %1",
+	"plugin-item.not-compatible": "This plugin has no compatibility data, make sure it works before installing on your production environment.",
 
 	"alert.enabled": "プラグインは有効化されました",
 	"alert.disabled": "プラグインは無効化されました",
 	"alert.upgraded": "プラグインはアップグレードされました",
 	"alert.installed": "プラグインはインストールされました",
 	"alert.uninstalled": "プラグインはアンインストールされました",
-	"alert.activate-success": "このプラグインを完全にアクティブするためにNodeBBを再起動してください",
+	"alert.activate-success": "Please rebuild and restart your NodeBB to fully activate this plugin",
 	"alert.deactivate-success": "プラグインは正常に非アクティブ化されました",
 	"alert.upgrade-success": "Please rebuild and restart your NodeBB to fully upgrade this plugin.",
 	"alert.install-success": "プラグインは正常にインストールされました。プラグインをアクティブにしてください",

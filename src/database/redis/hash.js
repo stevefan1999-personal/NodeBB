@@ -1,145 +1,211 @@
 'use strict';
 
-module.exports = function (redisClient, module) {
-	var helpers = module.helpers.redis;
+module.exports = function (module) {
+	const helpers = require('./helpers');
 
-	module.setObject = function (key, data, callback) {
-		callback = callback || function () {};
+	const cache = require('../cache').create('redis');
+
+	module.objectCache = cache;
+
+	module.setObject = async function (key, data) {
 		if (!key || !data) {
-			return callback();
+			return;
 		}
 
 		if (data.hasOwnProperty('')) {
 			delete data[''];
 		}
 
-		Object.keys(data).forEach(function (key) {
+		Object.keys(data).forEach((key) => {
 			if (data[key] === undefined || data[key] === null) {
 				delete data[key];
 			}
 		});
 
-		redisClient.hmset(key, data, function (err) {
-			callback(err);
-		});
-	};
-
-	module.setObjectField = function (key, field, value, callback) {
-		callback = callback || function () {};
-		if (!field) {
-			return callback();
-		}
-		redisClient.hset(key, field, value, function (err) {
-			callback(err);
-		});
-	};
-
-	module.getObject = function (key, callback) {
-		redisClient.hgetall(key, callback);
-	};
-
-	module.getObjects = function (keys, callback) {
-		helpers.multiKeys(redisClient, 'hgetall', keys, callback);
-	};
-
-	module.getObjectField = function (key, field, callback) {
-		module.getObjectFields(key, [field], function (err, data) {
-			callback(err, data ? data[field] : null);
-		});
-	};
-
-	module.getObjectFields = function (key, fields, callback) {
-		module.getObjectsFields([key], fields, function (err, results) {
-			callback(err, results ? results[0] : null);
-		});
-	};
-
-	module.getObjectsFields = function (keys, fields, callback) {
-		if (!Array.isArray(fields) || !fields.length) {
-			return callback(null, keys.map(function () { return {}; }));
-		}
-		var multi = redisClient.multi();
-
-		for (var x = 0; x < keys.length; x += 1) {
-			multi.hmget.apply(multi, [keys[x]].concat(fields));
-		}
-
-		function makeObject(array) {
-			var obj = {};
-
-			for (var i = 0, ii = fields.length; i < ii; i += 1) {
-				obj[fields[i]] = array[i];
-			}
-			return obj;
-		}
-
-		multi.exec(function (err, results) {
-			if (err) {
-				return callback(err);
-			}
-
-			results = results.map(makeObject);
-			callback(null, results);
-		});
-	};
-
-	module.getObjectKeys = function (key, callback) {
-		redisClient.hkeys(key, callback);
-	};
-
-	module.getObjectValues = function (key, callback) {
-		redisClient.hvals(key, callback);
-	};
-
-	module.isObjectField = function (key, field, callback) {
-		redisClient.hexists(key, field, function (err, exists) {
-			callback(err, exists === 1);
-		});
-	};
-
-	module.isObjectFields = function (key, fields, callback) {
-		helpers.multiKeyValues(redisClient, 'hexists', key, fields, function (err, results) {
-			callback(err, Array.isArray(results) ? helpers.resultsToBool(results) : null);
-		});
-	};
-
-	module.deleteObjectField = function (key, field, callback) {
-		callback = callback || function () {};
-		if (key === undefined || key === null || field === undefined || field === null) {
-			return setImmediate(callback);
-		}
-		redisClient.hdel(key, field, function (err) {
-			callback(err);
-		});
-	};
-
-	module.deleteObjectFields = function (key, fields, callback) {
-		helpers.multiKeyValues(redisClient, 'hdel', key, fields, function (err) {
-			callback(err);
-		});
-	};
-
-	module.incrObjectField = function (key, field, callback) {
-		module.incrObjectFieldBy(key, field, 1, callback);
-	};
-
-	module.decrObjectField = function (key, field, callback) {
-		module.incrObjectFieldBy(key, field, -1, callback);
-	};
-
-	module.incrObjectFieldBy = function (key, field, value, callback) {
-		value = parseInt(value, 10);
-		if (!key || isNaN(value)) {
-			return callback(null, null);
+		if (!Object.keys(data).length) {
+			return;
 		}
 		if (Array.isArray(key)) {
-			var multi = redisClient.multi();
-			key.forEach(function (key) {
-				multi.hincrby(key, field, value);
-			});
-			multi.exec(callback);
+			const batch = module.client.batch();
+			key.forEach(k => batch.hmset(k, data));
+			await helpers.execBatch(batch);
 		} else {
-			redisClient.hincrby(key, field, value, callback);
+			await module.client.async.hmset(key, data);
 		}
+
+		cache.del(key);
+	};
+
+	module.setObjectBulk = async function (keys, data) {
+		if (!keys.length || !data.length) {
+			return;
+		}
+		const batch = module.client.batch();
+		keys.forEach((k, i) => batch.hmset(k, data[i]));
+		await helpers.execBatch(batch);
+		cache.del(keys);
+	};
+
+	module.setObjectField = async function (key, field, value) {
+		if (!field) {
+			return;
+		}
+		if (Array.isArray(key)) {
+			const batch = module.client.batch();
+			key.forEach(k => batch.hset(k, field, value));
+			await helpers.execBatch(batch);
+		} else {
+			await module.client.async.hset(key, field, value);
+		}
+
+		cache.del(key);
+	};
+
+	module.getObject = async function (key, fields = []) {
+		if (!key) {
+			return null;
+		}
+
+		const data = await module.getObjectsFields([key], fields);
+		return data && data.length ? data[0] : null;
+	};
+
+	module.getObjects = async function (keys, fields = []) {
+		return await module.getObjectsFields(keys, fields);
+	};
+
+	module.getObjectField = async function (key, field) {
+		if (!key) {
+			return null;
+		}
+		const cachedData = {};
+		cache.getUnCachedKeys([key], cachedData);
+		if (cachedData[key]) {
+			return cachedData[key].hasOwnProperty(field) ? cachedData[key][field] : null;
+		}
+		return await module.client.async.hget(key, String(field));
+	};
+
+	module.getObjectFields = async function (key, fields) {
+		if (!key) {
+			return null;
+		}
+		const results = await module.getObjectsFields([key], fields);
+		return results ? results[0] : null;
+	};
+
+	module.getObjectsFields = async function (keys, fields) {
+		if (!Array.isArray(keys) || !keys.length) {
+			return [];
+		}
+
+		const cachedData = {};
+		const unCachedKeys = cache.getUnCachedKeys(keys, cachedData);
+
+		let data = [];
+		if (unCachedKeys.length > 1) {
+			const batch = module.client.batch();
+			unCachedKeys.forEach(k => batch.hgetall(k));
+			data = await helpers.execBatch(batch);
+		} else if (unCachedKeys.length === 1) {
+			data = [await module.client.async.hgetall(unCachedKeys[0])];
+		}
+
+		// convert empty objects into null for back-compat with node_redis
+		data = data.map((elem) => {
+			if (!Object.keys(elem).length) {
+				return null;
+			}
+			return elem;
+		});
+
+		unCachedKeys.forEach((key, i) => {
+			cachedData[key] = data[i] || null;
+			cache.set(key, cachedData[key]);
+		});
+
+		if (!Array.isArray(fields) || !fields.length) {
+			return keys.map(key => (cachedData[key] ? { ...cachedData[key] } : null));
+		}
+		return keys.map((key) => {
+			const item = cachedData[key] || {};
+			const result = {};
+			fields.forEach((field) => {
+				result[field] = item[field] !== undefined ? item[field] : null;
+			});
+			return result;
+		});
+	};
+
+	module.getObjectKeys = async function (key) {
+		return await module.client.async.hkeys(key);
+	};
+
+	module.getObjectValues = async function (key) {
+		return await module.client.async.hvals(key);
+	};
+
+	module.isObjectField = async function (key, field) {
+		const exists = await module.client.async.hexists(key, field);
+		return exists === 1;
+	};
+
+	module.isObjectFields = async function (key, fields) {
+		const batch = module.client.batch();
+		fields.forEach(f => batch.hexists(String(key), String(f)));
+		const results = await helpers.execBatch(batch);
+		return Array.isArray(results) ? helpers.resultsToBool(results) : null;
+	};
+
+	module.deleteObjectField = async function (key, field) {
+		if (key === undefined || key === null || field === undefined || field === null) {
+			return;
+		}
+		await module.client.async.hdel(key, field);
+		cache.del(key);
+	};
+
+	module.deleteObjectFields = async function (key, fields) {
+		if (!key || (Array.isArray(key) && !key.length) || !Array.isArray(fields) || !fields.length) {
+			return;
+		}
+		fields = fields.filter(Boolean);
+		if (!fields.length) {
+			return;
+		}
+		if (Array.isArray(key)) {
+			const batch = module.client.batch();
+			key.forEach(k => batch.hdel(k, fields));
+			await helpers.execBatch(batch);
+		} else {
+			await module.client.async.hdel(key, fields);
+		}
+
+		cache.del(key);
+	};
+
+	module.incrObjectField = async function (key, field) {
+		return await module.incrObjectFieldBy(key, field, 1);
+	};
+
+	module.decrObjectField = async function (key, field) {
+		return await module.incrObjectFieldBy(key, field, -1);
+	};
+
+	module.incrObjectFieldBy = async function (key, field, value) {
+		value = parseInt(value, 10);
+		if (!key || isNaN(value)) {
+			return null;
+		}
+		let result;
+		if (Array.isArray(key)) {
+			const batch = module.client.batch();
+			key.forEach(k => batch.hincrby(k, field, value));
+			result = await helpers.execBatch(batch);
+		} else {
+			result = await module.client.async.hincrby(key, field, value);
+		}
+		cache.del(key);
+		return Array.isArray(result) ? result.map(value => parseInt(value, 10)) : parseInt(result, 10);
 	};
 };

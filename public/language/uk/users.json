@@ -10,6 +10,8 @@
     "filter-by": "Фільтрувати за",
     "online-only": "Лише в мережі",
     "invite": "Запросити",
+    "prompt-email": "Емейли:",
+    "groups-to-join": "Groups to be joined when invite is accepted:",
     "invitation-email-sent": "Лист із запрошенням відправлено %1",
     "user_list": "Список користувачів",
     "recent_topics": "Нещодавні теми",

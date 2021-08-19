@@ -33,6 +33,10 @@
 					[[admin/settings/cookies:consent.blank-localised-default]]
 				</p>
 			</div>
+			<div class="form-group">
+				<label for="cookieConsentLinkUrl">[[admin/settings/cookies:consent.link-url]]</label>
+				<input class="form-control" id="cookieConsentLinkUrl" type="text" data-field="cookieConsentLinkUrl" />
+			</div>
 		</form>
 	</div>
 </div>
@@ -44,6 +48,14 @@
 			<div class="form-group">
 				<label for="cookieDomain">[[admin/settings/cookies:cookie-domain]]</label>
 				<input class="form-control" id="cookieDomain" type="text" placeholder=".domain.tld" data-field="cookieDomain" /><br />
+				<p class="help-block">
+					[[admin/settings/cookies:blank-default]]
+				</p>
+			</div>
+
+			<div class="form-group">
+				<label for="maxUserSessions">[[admin/settings/cookies:max-user-sessions]]</label>
+				<input class="form-control" id="maxUserSessions" type="number" placeholder="10" data-field="maxUserSessions" /><br />
 				<p class="help-block">
 					[[admin/settings/cookies:blank-default]]
 				</p>

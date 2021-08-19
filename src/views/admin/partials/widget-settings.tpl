@@ -1,18 +1,13 @@
 <br />
-<label>Title:</label>
-<input type="text" class="form-control" name="title" placeholder="Title (only shown on some containers)" /><br />
+<label>[[admin/extend/widgets:title]]</label>
+<input type="text" class="form-control" name="title" placeholder="[[admin/extend/widgets:title.placeholder]]" /><br />
 
-<label>Container:</label>
-<textarea rows="4" class="form-control container-html" name="container" placeholder="Drag and drop a container or enter HTML here."></textarea>
+<label>[[admin/extend/widgets:container]]</label>
+<textarea rows="4" class="form-control container-html" name="container" placeholder="[[admin/extend/widgets:container.placeholder]]"></textarea>
 
-<div class="checkbox">
-<label><input name="hide-guests" type="checkbox"> Hide from anonymous users?</label>
-</div>
-
-<div class="checkbox">
-<label><input name="hide-registered" type="checkbox"> Hide from registered users?</input></label>
-</div>
+<br/>
+<!-- IMPORT admin/partials/widgets/show_hide_groups.tpl -->
 
 <div class="checkbox">
-<label><input name="hide-mobile" type="checkbox"> Hide on mobile?</input></label>
+<label><input name="hide-mobile" type="checkbox"> [[admin/extend/widgets:hide-on-mobile]]</input></label>
 </div>

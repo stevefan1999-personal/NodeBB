@@ -1,43 +1,75 @@
 
 'use strict';
 
-var async = require('async');
-var nconf = require('nconf');
+const nconf = require('nconf');
 
-var user = require('../user');
-var utils = require('../utils');
-var translator = require('../translator');
-var plugins = require('../plugins');
-var db = require('../database');
-var meta = require('../meta');
-var emailer = require('../emailer');
+const user = require('./index');
+const utils = require('../utils');
+const plugins = require('../plugins');
+const db = require('../database');
+const meta = require('../meta');
+const emailer = require('../emailer');
+const groups = require('../groups');
+const events = require('../events');
 
-var UserEmail = module.exports;
+const UserEmail = module.exports;
 
-UserEmail.exists = function (email, callback) {
-	user.getUidByEmail(email.toLowerCase(), function (err, exists) {
-		callback(err, !!exists);
-	});
+UserEmail.exists = async function (email) {
+	const uid = await user.getUidByEmail(email.toLowerCase());
+	return !!uid;
 };
 
-UserEmail.available = function (email, callback) {
-	db.isSortedSetMember('email:uid', email.toLowerCase(), function (err, exists) {
-		callback(err, !exists);
-	});
+UserEmail.available = async function (email) {
+	const exists = await db.isSortedSetMember('email:uid', email.toLowerCase());
+	return !exists;
 };
 
-UserEmail.sendValidationEmail = function (uid, options, callback) {
+UserEmail.remove = async function (uid, sessionId) {
+	const email = await user.getUserField(uid, 'email');
+	if (!email) {
+		return;
+	}
+
+	await Promise.all([
+		user.setUserFields(uid, {
+			email: '',
+			'email:confirmed': 0,
+		}),
+		db.sortedSetRemove('email:uid', email.toLowerCase()),
+		db.sortedSetRemove('email:sorted', `${email.toLowerCase()}:${uid}`),
+		user.email.expireValidation(uid),
+		user.auth.revokeAllSessions(uid, sessionId),
+		events.log({ type: 'email-change', email, newEmail: '' }),
+	]);
+};
+
+UserEmail.isValidationPending = async (uid, email) => {
+	const code = await db.get(`confirm:byUid:${uid}`);
+
+	if (email) {
+		const confirmObj = await db.getObject(`confirm:${code}`);
+		return confirmObj && email === confirmObj.email;
+	}
+
+	return !!code;
+};
+
+UserEmail.expireValidation = async (uid) => {
+	const code = await db.get(`confirm:byUid:${uid}`);
+	await db.deleteAll([
+		`confirm:byUid:${uid}`,
+		`confirm:${code}`,
+	]);
+};
+
+UserEmail.sendValidationEmail = async function (uid, options) {
 	/*
 	 * 	Options:
 	 * 		- email, overrides email retrieval
 	 * 		- force, sends email even if it is too soon to send another
 	 */
 
-	// Handling for 2 arguments
-	if (arguments.length === 2 && typeof options === 'function') {
-		callback = options;
-		options = {};
-	}
+	options = options || {};
 
 	// Fallback behaviour (email passed in as second argument)
 	if (typeof options === 'string') {
@@ -46,119 +78,107 @@ UserEmail.sendValidationEmail = function (uid, options, callback) {
 		};
 	}
 
-	callback = callback || function () {};
-	var confirm_code = utils.generateUUID();
-	var confirm_link = nconf.get('url') + '/confirm/' + confirm_code;
+	let confirm_code = utils.generateUUID();
+	const confirm_link = `${nconf.get('url')}/confirm/${confirm_code}`;
 
-	var emailInterval = meta.config.hasOwnProperty('emailConfirmInterval') ? parseInt(meta.config.emailConfirmInterval, 10) : 10;
+	const emailInterval = meta.config.emailConfirmInterval;
 
-	async.waterfall([
-		function (next) {
-			// If no email passed in (default), retrieve email from uid
-			if (options.email && options.email.length) {
-				return setImmediate(next, null, options.email);
-			}
+	// If no email passed in (default), retrieve email from uid
+	if (!options.email || !options.email.length) {
+		options.email = await user.getUserField(uid, 'email');
+	}
+	if (!options.email) {
+		return;
+	}
+	let sent = false;
+	if (!options.force) {
+		sent = await UserEmail.isValidationPending(uid, options.email);
+	}
+	if (sent) {
+		throw new Error(`[[error:confirm-email-already-sent, ${emailInterval}]]`);
+	}
 
-			user.getUserField(uid, 'email', next);
-		},
-		function (email, next) {
-			options.email = email;
-			if (!options.email) {
-				return callback();
-			}
+	await UserEmail.expireValidation(uid);
+	await db.set(`confirm:byUid:${uid}`, confirm_code);
+	await db.pexpireAt(`confirm:byUid:${uid}`, Date.now() + (emailInterval * 60 * 1000));
+	confirm_code = await plugins.hooks.fire('filter:user.verify.code', confirm_code);
 
-			if (options.force) {
-				return setImmediate(next, null, false);
-			}
+	await db.setObject(`confirm:${confirm_code}`, {
+		email: options.email.toLowerCase(),
+		uid: uid,
+	});
+	await db.expireAt(`confirm:${confirm_code}`, Math.floor((Date.now() / 1000) + (60 * 60 * 24)));
+	const username = await user.getUserField(uid, 'username');
 
-			db.get('uid:' + uid + ':confirm:email:sent', next);
-		},
-		function (sent, next) {
-			if (sent) {
-				return next(new Error('[[error:confirm-email-already-sent, ' + emailInterval + ']]'));
-			}
-			db.set('uid:' + uid + ':confirm:email:sent', 1, next);
-		},
-		function (next) {
-			db.pexpireAt('uid:' + uid + ':confirm:email:sent', Date.now() + (emailInterval * 60 * 1000), next);
-		},
-		function (next) {
-			plugins.fireHook('filter:user.verify.code', confirm_code, next);
-		},
-		function (_confirm_code, next) {
-			confirm_code = _confirm_code;
-			db.setObject('confirm:' + confirm_code, {
-				email: options.email.toLowerCase(),
-				uid: uid,
-			}, next);
-		},
-		function (next) {
-			db.expireAt('confirm:' + confirm_code, Math.floor((Date.now() / 1000) + (60 * 60 * 24)), next);
-		},
-		function (next) {
-			user.getUserField(uid, 'username', next);
-		},
-		function (username, next) {
-			var title = meta.config.title || meta.config.browserTitle || 'NodeBB';
-			var subject = options.subject || '[[email:welcome-to, ' + title + ']]';
-			var template = options.template || 'welcome';
-			translator.translate(subject, meta.config.defaultLang, function (subject) {
-				var data = {
-					username: username,
-					confirm_link: confirm_link,
-					confirm_code: confirm_code,
+	events.log({
+		type: 'email-confirmation-sent',
+		uid,
+		confirm_code,
+		...options,
+	});
 
-					subject: subject,
-					template: template,
-					uid: uid,
-				};
+	const data = {
+		uid,
+		username,
+		confirm_link,
+		confirm_code,
+		email: options.email,
 
-				if (plugins.hasListeners('action:user.verify')) {
-					plugins.fireHook('action:user.verify', { uid: uid, data: data });
-					next();
-				} else {
-					emailer.send(template, uid, data, next);
-				}
-			});
-		},
-		function (next) {
-			next(null, confirm_code);
-		},
-	], callback);
+		subject: options.subject || '[[email:email.verify-your-email.subject]]',
+		template: options.template || 'verify-email',
+	};
+
+	if (plugins.hooks.hasListeners('action:user.verify')) {
+		plugins.hooks.fire('action:user.verify', { uid: uid, data: data });
+	} else {
+		await emailer.send(data.template, uid, data);
+	}
+	return confirm_code;
 };
 
-UserEmail.confirm = function (code, callback) {
-	var confirmObj;
-	async.waterfall([
-		function (next) {
-			db.getObject('confirm:' + code, next);
-		},
-		function (_confirmObj, next) {
-			confirmObj = _confirmObj;
-			if (!confirmObj || !confirmObj.uid || !confirmObj.email) {
-				return next(new Error('[[error:invalid-data]]'));
-			}
+// confirm email by code sent by confirmation email
+UserEmail.confirmByCode = async function (code, sessionId) {
+	const confirmObj = await db.getObject(`confirm:${code}`);
+	if (!confirmObj || !confirmObj.uid || !confirmObj.email) {
+		throw new Error('[[error:invalid-data]]');
+	}
 
-			user.getUserField(confirmObj.uid, 'email', next);
-		},
-		function (currentEmail, next) {
-			if (!currentEmail || currentEmail.toLowerCase() !== confirmObj.email) {
-				return next(new Error('[[error:invalid-email]]'));
-			}
+	const oldEmail = await user.getUserField(confirmObj.uid, 'email');
+	if (oldEmail && confirmObj.email !== oldEmail) {
+		await UserEmail.remove(confirmObj.uid, sessionId);
+	} else {
+		await user.auth.revokeAllSessions(confirmObj.uid, sessionId);
+	}
 
-			async.series([
-				async.apply(user.setUserField, confirmObj.uid, 'email:confirmed', 1),
-				async.apply(db.delete, 'confirm:' + code),
-				async.apply(db.delete, 'uid:' + confirmObj.uid + ':confirm:email:sent'),
-				function (next) {
-					db.sortedSetRemove('users:notvalidated', confirmObj.uid, next);
-				},
-				function (next) {
-					plugins.fireHook('action:user.email.confirmed', { uid: confirmObj.uid, email: confirmObj.email }, next);
-				},
-			], next);
-		},
-	], function (err) {
-		callback(err);
-	});
+	await user.setUserField(confirmObj.uid, 'email', confirmObj.email);
+	await Promise.all([
+		UserEmail.confirmByUid(confirmObj.uid),
+		db.delete(`confirm:${code}`),
+		events.log({ type: 'email-change', oldEmail, newEmail: confirmObj.email }),
+	]);
+};
+
+// confirm uid's email via ACP
+UserEmail.confirmByUid = async function (uid) {
+	if (!(parseInt(uid, 10) > 0)) {
+		throw new Error('[[error:invalid-uid]]');
+	}
+	const currentEmail = await user.getUserField(uid, 'email');
+	if (!currentEmail) {
+		throw new Error('[[error:invalid-email]]');
+	}
+
+	await Promise.all([
+		db.sortedSetAddBulk([
+			['email:uid', uid, currentEmail.toLowerCase()],
+			['email:sorted', 0, `${currentEmail.toLowerCase()}:${uid}`],
+			[`user:${uid}:emails`, Date.now(), `${currentEmail}:${Date.now()}`],
+		]),
+		user.setUserField(uid, 'email:confirmed', 1),
+		groups.join('verified-users', uid),
+		groups.leave('unverified-users', uid),
+		user.email.expireValidation(uid),
+		user.reset.cleanByUid(uid),
+	]);
+	await plugins.hooks.fire('action:user.email.confirmed', { uid: uid, email: currentEmail });
 };

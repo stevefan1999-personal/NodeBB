@@ -1,4 +1,5 @@
 {
+	"trending": "Trending",
 	"installed": "منصبة",
 	"active": "مفعلة",
 	"inactive": "معطلة",
@@ -9,6 +10,7 @@
 
 	"plugin-search": "البحث عن الإضافات",
 	"plugin-search-placeholder": "جاري البحث عن الإضافات...",
+	"submit-anonymous-usage": "Submit anonymous plugin usage data.",
 	"reorder-plugins": "إعادة ترتيب الإضافات",
 	"order-active": "ترتيب الإضافات المفعلة",
 	"dev-interested": "هل انته مهتم ببرمجة إضافات لـNodeBB؟",
@@ -29,13 +31,15 @@
 	"plugin-item.more-info": "لمزيد من المعلومات:",
 	"plugin-item.unknown": "غير معروف",
 	"plugin-item.unknown-explanation": "تعذر تحديد حالة هذه الإضافة، ربما بسبب خطأ في الإعدادات.",
+	"plugin-item.compatible": "This plugin works on NodeBB %1",
+	"plugin-item.not-compatible": "This plugin has no compatibility data, make sure it works before installing on your production environment.",
 
 	"alert.enabled": "الإضافة مفعلة",
 	"alert.disabled": "الإضافة معطلة",
 	"alert.upgraded": "الإضافة مرقاة",
 	"alert.installed": "الإضافة منصبة",
 	"alert.uninstalled": "تم إلغاء تنصيب الإضافة",
-	"alert.activate-success": "يرجى إعادة تشغيل NodeBB لتنشيط الإضافة بشكل بالكامل",
+	"alert.activate-success": "Please rebuild and restart your NodeBB to fully activate this plugin",
 	"alert.deactivate-success": "تم تعطيل الإضافة بنجاح",
 	"alert.upgrade-success": "Please rebuild and restart your NodeBB to fully upgrade this plugin.",
 	"alert.install-success": "تم تثبيت الإضافة بنجاح، يرجى تفعيلها.",
