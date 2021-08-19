@@ -15,7 +15,6 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    if: startsWith(github.event.ref, 'refs/tags/v')
     steps:
       - name: Extract tag name
         uses: olegtarasov/get-tag@v2.1
