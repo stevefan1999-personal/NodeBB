@@ -8,8 +8,8 @@ ENV NODE_ENV $NODE_ENV
 
 COPY install/package.json /usr/src/app/package.json
 
-RUN npm install --only=prod --force && \
-    npm cache clean --force
+RUN yarn --prod --unsafe-perm && \
+    yarn cache clean --force
 
 FROM node:lts-alpine3.14
 
@@ -28,4 +28,4 @@ ENV NODE_ENV=production \
 
 EXPOSE 4567
 
-CMD ["./nodebb", "build"]
+CMD node ./nodebb build ;  node ./nodebb start
