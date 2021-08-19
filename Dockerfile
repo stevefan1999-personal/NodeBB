@@ -17,11 +17,14 @@ ENV NODE_ENV $NODE_ENV
 COPY --from=builder /usr/src/app/node_modules/ node_modules/
 COPY install/package.json package.json
 COPY . .
+RUN chmod +x /entrypoint.sh
 
 ENV NODE_ENV=production \
     daemon=false \
     silent=false
 
-EXPOSE 4567
+VOLUME /data
+ENTRYPOINT [ "entrypoint.sh" ]
+CMD [ "nodebb", "start" ]
 
-CMD node ./nodebb build ;  node ./nodebb start
+EXPOSE 4567
