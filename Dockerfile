@@ -25,6 +25,6 @@ ENV NODE_ENV=production \
 
 VOLUME /data
 ENTRYPOINT [ "/usr/src/app/entrypoint.sh" ]
-CMD [ "nodebb", "start" ]
+CMD [ "./nodebb", "start" ]
 
 EXPOSE 4567
