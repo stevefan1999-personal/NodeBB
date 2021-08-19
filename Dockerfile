@@ -1,17 +1,13 @@
-FROM node:lts-alpine3.14 AS builder
+FROM node:lts-buster AS builder
 
-RUN apk add --no-cache --virtual .build-deps git python3 make gcc g++
 WORKDIR /usr/src/app
-
-ARG NODE_ENV
-ENV NODE_ENV $NODE_ENV
 
 COPY install/package.json /usr/src/app/package.json
 
 RUN yarn --prod --unsafe-perm && \
     yarn cache clean --force
 
-FROM node:lts-alpine3.14
+FROM node:lts-buster-slim
 
 WORKDIR /usr/src/app
 
