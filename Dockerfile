@@ -9,8 +9,8 @@ COPY install/package.json /usr/src/app/package.json
 COPY . .
 RUN chmod +x entrypoint.sh
 
-RUN yarn --prod --unsafe-perm && \
-    yarn cache clean --force
+RUN npm install --only=prod && \
+    npm cache clean --force
 
 ENV NODE_ENV=production \
     daemon=false \
