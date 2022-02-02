@@ -2,9 +2,9 @@
 
 
 define('forum/topic/move', ['categorySelector', 'alerts', 'hooks'], function (categorySelector, alerts, hooks) {
-	var Move = {};
-	var modal;
-	var selectedCategory;
+	const Move = {};
+	let modal;
+	let selectedCategory;
 
 	Move.init = function (tids, currentCid, onComplete) {
 		Move.tids = tids;
@@ -45,19 +45,19 @@ define('forum/topic/move', ['categorySelector', 'alerts', 'hooks'], function (ca
 	}
 
 	function onCommitClicked() {
-		var commitEl = modal.find('#move_thread_commit');
+		const commitEl = modal.find('#move_thread_commit');
 
 		if (!commitEl.prop('disabled') && selectedCategory && selectedCategory.cid) {
 			commitEl.prop('disabled', true);
 
 			modal.modal('hide');
-			var message = '[[topic:topic_move_success, ' + selectedCategory.name + ']]';
+			let message = '[[topic:topic_move_success, ' + selectedCategory.name + ']]';
 			if (Move.tids && Move.tids.length > 1) {
 				message = '[[topic:topic_move_multiple_success, ' + selectedCategory.name + ']]';
 			} else if (!Move.tids) {
 				message = '[[topic:topic_move_all_success, ' + selectedCategory.name + ']]';
 			}
-			var data = {
+			const data = {
 				tids: Move.tids ? Move.tids.slice() : null,
 				cid: selectedCategory.cid,
 				currentCid: Move.currentCid,
@@ -75,7 +75,7 @@ define('forum/topic/move', ['categorySelector', 'alerts', 'hooks'], function (ca
 					},
 					clickfn: function (alert, params) {
 						delete params.timeoutfn;
-						app.alertSuccess('[[topic:topic_move_undone]]');
+						alerts.success('[[topic:topic_move_undone]]');
 					},
 				});
 			}
@@ -89,7 +89,7 @@ define('forum/topic/move', ['categorySelector', 'alerts', 'hooks'], function (ca
 
 		socket.emit(!data.tids ? 'topics.moveAll' : 'topics.move', data, function (err) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 
 			if (typeof data.onComplete === 'function') {

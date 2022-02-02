@@ -1,8 +1,8 @@
 'use strict';
 
 
-define('admin/advanced/errors', ['Chart'], function (Chart) {
-	var Errors = {};
+define('admin/advanced/errors', ['bootbox', 'alerts', 'Chart'], function (bootbox, alerts, Chart) {
+	const Errors = {};
 
 	Errors.init = function () {
 		Errors.setupCharts();
@@ -15,20 +15,20 @@ define('admin/advanced/errors', ['Chart'], function (Chart) {
 			if (ok) {
 				socket.emit('admin.errors.clear', {}, function (err) {
 					if (err) {
-						return app.alertError(err.message);
+						return alerts.error(err);
 					}
 
 					ajaxify.refresh();
-					app.alertSuccess('[[admin/advanced/errors:clear404-success]]');
+					alerts.success('[[admin/advanced/errors:clear404-success]]');
 				});
 			}
 		});
 	};
 
 	Errors.setupCharts = function () {
-		var notFoundCanvas = document.getElementById('not-found');
-		var tooBusyCanvas = document.getElementById('toobusy');
-		var dailyLabels = utils.getDaysArray();
+		const notFoundCanvas = document.getElementById('not-found');
+		const tooBusyCanvas = document.getElementById('toobusy');
+		let dailyLabels = utils.getDaysArray();
 
 		dailyLabels = dailyLabels.slice(-7);
 
@@ -36,7 +36,7 @@ define('admin/advanced/errors', ['Chart'], function (Chart) {
 			Chart.defaults.global.tooltips.enabled = false;
 		}
 
-		var data = {
+		const data = {
 			'not-found': {
 				labels: dailyLabels,
 				datasets: [

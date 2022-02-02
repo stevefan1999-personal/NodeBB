@@ -1,24 +1,15 @@
 'use strict';
 
 
-define('forum/chats/search', ['components', 'api'], function (components, api) {
-	var search = {};
+define('forum/chats/search', ['components', 'api', 'alerts'], function (components, api, alerts) {
+	const search = {};
 
 	search.init = function () {
-		var timeoutId = 0;
-
-		components.get('chat/search').on('keyup', function () {
-			if (timeoutId) {
-				clearTimeout(timeoutId);
-				timeoutId = 0;
-			}
-
-			timeoutId = setTimeout(doSearch, 250);
-		});
+		components.get('chat/search').on('keyup', utils.debounce(doSearch, 250));
 	};
 
 	function doSearch() {
-		var username = components.get('chat/search').val();
+		const username = components.get('chat/search').val();
 		if (!username) {
 			return $('[component="chat/search/list"]').empty();
 		}
@@ -28,11 +19,11 @@ define('forum/chats/search', ['components', 'api'], function (components, api) {
 			searchBy: 'username',
 			paginate: false,
 		}).then(displayResults)
-			.catch(app.alertError);
+			.catch(alerts.error);
 	}
 
 	function displayResults(data) {
-		var chatsListEl = $('[component="chat/search/list"]');
+		const chatsListEl = $('[component="chat/search/list"]');
 		chatsListEl.empty();
 
 		data.users = data.users.filter(function (user) {
@@ -44,7 +35,7 @@ define('forum/chats/search', ['components', 'api'], function (components, api) {
 		}
 
 		data.users.forEach(function (userObj) {
-			var chatEl = displayUser(chatsListEl, userObj);
+			const chatEl = displayUser(chatsListEl, userObj);
 			onUserClick(chatEl, userObj);
 		});
 
@@ -54,12 +45,12 @@ define('forum/chats/search', ['components', 'api'], function (components, api) {
 	function displayUser(chatsListEl, userObj) {
 		function createUserImage() {
 			return (userObj.picture ?
-				'<img src="' +	userObj.picture + '" title="' +	userObj.username + '" />' :
+				'<img src="' + userObj.picture + '" title="' + userObj.username + '" />' :
 				'<div class="user-icon" style="background-color: ' + userObj['icon:bgColor'] + '">' + userObj['icon:text'] + '</div>') +
 				'<i class="fa fa-circle status ' + userObj.status + '"></i> ' + userObj.username;
 		}
 
-		var chatEl = $('<li component="chat/search/user"></li>')
+		const chatEl = $('<li component="chat/search/user"></li>')
 			.attr('data-uid', userObj.uid)
 			.appendTo(chatsListEl);
 
@@ -71,14 +62,16 @@ define('forum/chats/search', ['components', 'api'], function (components, api) {
 		chatEl.on('click', function () {
 			socket.emit('modules.chats.hasPrivateChat', userObj.uid, function (err, roomId) {
 				if (err) {
-					return app.alertError(err.message);
+					return alerts.error(err);
 				}
 				if (roomId) {
 					require(['forum/chats'], function (chats) {
 						chats.switchChat(roomId);
 					});
 				} else {
-					app.newChat(userObj.uid);
+					require(['chat'], function (chat) {
+						chat.newChat(userObj.uid);
+					});
 				}
 			});
 		});

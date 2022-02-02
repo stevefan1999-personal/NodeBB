@@ -1,12 +1,12 @@
 'use strict';
 
 
-define('forum/topic/merge', function () {
-	var Merge = {};
-	var modal;
-	var mergeBtn;
+define('forum/topic/merge', ['search', 'alerts', 'api'], function (search, alerts, api) {
+	const Merge = {};
+	let modal;
+	let mergeBtn;
 
-	var selectedTids = {};
+	let selectedTids = {};
 
 	Merge.init = function (callback) {
 		callback = callback || function () {};
@@ -30,7 +30,7 @@ define('forum/topic/merge', function () {
 				mergeTopics(mergeBtn);
 			});
 
-			app.enableTopicSearch({
+			search.enableQuickSearch({
 				searchElements: {
 					inputEl: modal.find('.topic-search-input'),
 					resultEl: modal.find('.quick-search-container'),
@@ -52,11 +52,8 @@ define('forum/topic/merge', function () {
 
 	Merge.addTopic = function (tid, callback) {
 		callback = callback || function () {};
-		socket.emit('topics.getTopic', tid, function (err, topicData) {
-			if (err) {
-				return app.alertError(err);
-			}
-			var title = topicData ? topicData.title : 'No title';
+		api.get(`/topics/${tid}`, {}).then(function (topicData) {
+			const title = topicData ? topicData.title : 'No title';
 			if (selectedTids[tid]) {
 				delete selectedTids[tid];
 			} else {
@@ -65,14 +62,14 @@ define('forum/topic/merge', function () {
 			checkButtonEnable();
 			showTopicsSelected();
 			callback();
-		});
+		}).catch(alerts.error);
 	};
 
 	function onTopicClicked(ev) {
 		if (!modal) {
 			return;
 		}
-		var tid = $(this).parents('[component="category/topic"]').attr('data-tid');
+		const tid = $(this).parents('[component="category/topic"]').attr('data-tid');
 		Merge.addTopic(tid);
 
 		ev.preventDefault();
@@ -82,8 +79,8 @@ define('forum/topic/merge', function () {
 
 	function mergeTopics(btn) {
 		btn.attr('disabled', true);
-		var tids = Object.keys(selectedTids);
-		var options = {};
+		const tids = Object.keys(selectedTids);
+		const options = {};
 		if (modal.find('.merge-main-topic-radio').is(':checked')) {
 			options.mainTid = modal.find('.merge-main-topic-select').val();
 		} else if (modal.find('.merge-new-title-radio').is(':checked')) {
@@ -93,7 +90,7 @@ define('forum/topic/merge', function () {
 		socket.emit('topics.merge', { tids: tids, options: options }, function (err, tid) {
 			btn.removeAttr('disabled');
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 			ajaxify.go('/topic/' + tid);
 			closeModal();
@@ -104,12 +101,12 @@ define('forum/topic/merge', function () {
 		if (!modal) {
 			return;
 		}
-		var tids = Object.keys(selectedTids);
+		const tids = Object.keys(selectedTids);
 		tids.sort(function (a, b) {
 			return a - b;
 		});
 
-		var topics = tids.map(function (tid) {
+		const topics = tids.map(function (tid) {
 			return { tid: tid, title: selectedTids[tid] };
 		});
 

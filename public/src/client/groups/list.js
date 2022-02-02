@@ -1,9 +1,9 @@
 'use strict';
 
 define('forum/groups/list', [
-	'forum/infinitescroll', 'benchpress', 'api',
-], function (infinitescroll, Benchpress, api) {
-	var Groups = {};
+	'forum/infinitescroll', 'benchpress', 'api', 'bootbox', 'alerts',
+], function (infinitescroll, Benchpress, api, bootbox, alerts) {
+	const Groups = {};
 
 	Groups.init = function () {
 		infinitescroll.init(Groups.loadMoreGroups);
@@ -16,11 +16,11 @@ define('forum/groups/list', [
 						name: name,
 					}).then((res) => {
 						ajaxify.go('groups/' + res.slug);
-					}).catch(app.alertError);
+					}).catch(alerts.error);
 				}
 			});
 		});
-		var params = utils.params();
+		const params = utils.params();
 		$('#search-sort').val(params.sort || 'alpha');
 
 		// Group searching
@@ -58,9 +58,9 @@ define('forum/groups/list', [
 	};
 
 	Groups.search = function () {
-		var groupsEl = $('#groups-list');
-		var queryEl = $('#search-text');
-		var sortEl = $('#search-sort');
+		const groupsEl = $('#groups-list');
+		const queryEl = $('#search-text');
+		const sortEl = $('#search-sort');
 
 		socket.emit('groups.search', {
 			query: queryEl.val(),
@@ -72,7 +72,7 @@ define('forum/groups/list', [
 			},
 		}, function (err, groups) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 			groups = groups.filter(function (group) {
 				return group.name !== 'registered-users' && group.name !== 'guests';

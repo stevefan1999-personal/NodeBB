@@ -1,8 +1,8 @@
 'use strict';
 
 
-define('forum/chats/recent', function () {
-	var recent = {};
+define('forum/chats/recent', ['alerts'], function (alerts) {
+	const recent = {};
 
 	recent.init = function () {
 		require(['forum/chats'], function (Chats) {
@@ -11,8 +11,8 @@ define('forum/chats/recent', function () {
 			});
 
 			$('[component="chat/recent"]').on('scroll', function () {
-				var $this = $(this);
-				var bottom = ($this[0].scrollHeight - $this.height()) * 0.9;
+				const $this = $(this);
+				const bottom = ($this[0].scrollHeight - $this.height()) * 0.9;
 				if ($this.scrollTop() > bottom) {
 					loadMoreRecentChats();
 				}
@@ -21,7 +21,7 @@ define('forum/chats/recent', function () {
 	};
 
 	function loadMoreRecentChats() {
-		var recentChats = $('[component="chat/recent"]');
+		const recentChats = $('[component="chat/recent"]');
 		if (recentChats.attr('loading')) {
 			return;
 		}
@@ -31,7 +31,7 @@ define('forum/chats/recent', function () {
 			after: recentChats.attr('data-nextstart'),
 		}, function (err, data) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 
 			if (data && data.rooms.length) {

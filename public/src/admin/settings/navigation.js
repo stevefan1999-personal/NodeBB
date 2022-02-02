@@ -5,12 +5,13 @@ define('admin/settings/navigation', [
 	'translator',
 	'iconSelect',
 	'benchpress',
+	'alerts',
 	'jquery-ui/widgets/draggable',
 	'jquery-ui/widgets/droppable',
 	'jquery-ui/widgets/sortable',
-], function (translator, iconSelect, Benchpress) {
-	var navigation = {};
-	var available;
+], function (translator, iconSelect, Benchpress, alerts) {
+	const navigation = {};
+	let available;
 
 	navigation.init = function () {
 		available = ajaxify.data.available;
@@ -27,14 +28,20 @@ define('admin/settings/navigation', [
 		});
 
 		$('#enabled').on('click', '.iconPicker', function () {
-			var iconEl = $(this).find('i');
+			const iconEl = $(this).find('i');
 			iconSelect.init(iconEl, function (el) {
-				var newIconClass = el.attr('value');
-				var index = iconEl.parents('[data-index]').attr('data-index');
-				$('#active-navigation [data-index="' + index + '"] i').attr('class', 'fa fa-fw ' + newIconClass);
+				const newIconClass = el.attr('value');
+				const index = iconEl.parents('[data-index]').attr('data-index');
+				$('#active-navigation [data-index="' + index + '"] i.nav-icon').attr('class', 'fa fa-fw ' + newIconClass);
 				iconEl.siblings('[name="iconClass"]').val(newIconClass);
 				iconEl.siblings('.change-icon-link').toggleClass('hidden', !!newIconClass);
 			});
+		});
+
+		$('#enabled').on('click', '[name="dropdown"]', function () {
+			const el = $(this);
+			const index = el.parents('[data-index]').attr('data-index');
+			$('#active-navigation [data-index="' + index + '"] i.dropdown-icon').toggleClass('hidden', !el.is(':checked'));
 		});
 
 		$('#active-navigation').on('click', 'li', onSelect);
@@ -47,11 +54,11 @@ define('admin/settings/navigation', [
 	};
 
 	function onSelect() {
-		var clickedIndex = $(this).attr('data-index');
+		const clickedIndex = $(this).attr('data-index');
 		$('#active-navigation li').removeClass('active');
 		$(this).addClass('active');
 
-		var detailsForm = $('#enabled').children('[data-index="' + clickedIndex + '"]');
+		const detailsForm = $('#enabled').children('[data-index="' + clickedIndex + '"]');
 		$('#enabled li').addClass('hidden');
 
 		if (detailsForm.length) {
@@ -61,9 +68,9 @@ define('admin/settings/navigation', [
 	}
 
 	function drop(ev, ui) {
-		var id = ui.helper.attr('data-id');
-		var el = $('#active-navigation [data-id="' + id + '"]');
-		var data = id === 'custom' ? { iconClass: 'fa-navicon', groups: available[0].groups } : available[id];
+		const id = ui.helper.attr('data-id');
+		const el = $('#active-navigation [data-id="' + id + '"]');
+		const data = id === 'custom' ? { iconClass: 'fa-navicon', groups: available[0].groups } : available[id];
 
 		data.enabled = false;
 		data.index = (parseInt($('#enabled').children().last().attr('data-index'), 10) || 0) + 1;
@@ -87,23 +94,20 @@ define('admin/settings/navigation', [
 	}
 
 	function save() {
-		var nav = [];
+		const nav = [];
 
-		var indices = [];
+		const indices = [];
 		$('#active-navigation li').each(function () {
 			indices.push($(this).attr('data-index'));
 		});
 
 		indices.forEach(function (index) {
-			var el = $('#enabled').children('[data-index="' + index + '"]');
-			var form = el.find('form').serializeArray();
-			var data = {};
-			var properties = {};
+			const el = $('#enabled').children('[data-index="' + index + '"]');
+			const form = el.find('form').serializeArray();
+			const data = {};
 
 			form.forEach(function (input) {
-				if (input.name.slice(0, 9) === 'property:' && input.value === 'on') {
-					properties[input.name.slice(9)] = true;
-				} else if (data[input.name]) {
+				if (data[input.name]) {
 					if (!Array.isArray(data[input.name])) {
 						data[input.name] = [
 							data[input.name],
@@ -115,36 +119,28 @@ define('admin/settings/navigation', [
 				}
 			});
 
-			data.properties = {};
-
-			for (var prop in properties) {
-				if (properties.hasOwnProperty(prop)) {
-					data.properties[prop] = properties[prop];
-				}
-			}
-
 			nav.push(data);
 		});
 
 		socket.emit('admin.navigation.save', nav, function (err) {
 			if (err) {
-				app.alertError(err.message);
+				alerts.error(err);
 			} else {
-				app.alertSuccess('Successfully saved navigation');
+				alerts.success('Successfully saved navigation');
 			}
 		});
 	}
 
 	function remove() {
-		var index = $(this).parents('[data-index]').attr('data-index');
+		const index = $(this).parents('[data-index]').attr('data-index');
 		$('#active-navigation [data-index="' + index + '"]').remove();
 		$('#enabled [data-index="' + index + '"]').remove();
 		return false;
 	}
 
 	function toggle() {
-		var btn = $(this);
-		var disabled = btn.hasClass('btn-success');
+		const btn = $(this);
+		const disabled = btn.hasClass('btn-success');
 		translator.translate(disabled ? '[[admin/settings/navigation:btn.disable]]' : '[[admin/settings/navigation:btn.enable]]', function (html) {
 			btn.toggleClass('btn-warning').toggleClass('btn-success').html(html);
 			btn.parents('li').find('[name="enabled"]').val(disabled ? 'on' : '');

@@ -2,9 +2,9 @@
 
 
 define('forum/post-queue', [
-	'categoryFilter', 'categorySelector', 'api',
-], function (categoryFilter, categorySelector, api) {
-	var PostQueue = {};
+	'categoryFilter', 'categorySelector', 'api', 'alerts', 'bootbox',
+], function (categoryFilter, categorySelector, api, alerts, bootbox) {
+	const PostQueue = {};
 
 	PostQueue.init = function () {
 		$('[data-toggle="tooltip"]').tooltip();
@@ -13,23 +13,45 @@ define('forum/post-queue', [
 			privilege: 'moderate',
 		});
 
-		$('.posts-list').on('click', '[data-action]', function () {
-			var parent = $(this).parents('[data-id]');
-			var action = $(this).attr('data-action');
-			var id = parent.attr('data-id');
-			var listContainer = parent.get(0).parentNode;
+		$('.posts-list').on('click', '[data-action]', async function () {
+			function getMessage() {
+				return new Promise((resolve) => {
+					const modal = bootbox.dialog({
+						title: '[[post-queue:notify-user]]',
+						message: '<textarea class="form-control"></textarea>',
+						buttons: {
+							OK: {
+								label: '[[modules:bootbox.send]]',
+								callback: function () {
+									const val = modal.find('textarea').val();
+									if (val) {
+										resolve(val);
+									}
+								},
+							},
+						},
+					});
+				});
+			}
+			const parent = $(this).parents('[data-id]');
+			const action = $(this).attr('data-action');
+			const id = parent.attr('data-id');
+			const listContainer = parent.get(0).parentNode;
 
-			if (!['accept', 'reject'].some(function (valid) {
-				return action === valid;
-			})) {
+			if (!['accept', 'reject', 'notify'].includes(action)) {
 				return;
 			}
 
-			socket.emit('posts.' + action, { id: id }, function (err) {
+			socket.emit('posts.' + action, {
+				id: id,
+				message: action === 'notify' ? await getMessage() : undefined,
+			}, function (err) {
 				if (err) {
-					return app.alertError(err.message);
+					return alerts.error(err);
 				}
-				parent.remove();
+				if (action === 'accept' || action === 'reject') {
+					parent.remove();
+				}
 
 				if (listContainer.childElementCount === 0) {
 					ajaxify.refresh();
@@ -42,8 +64,8 @@ define('forum/post-queue', [
 		handleContentEdit('.topic-title', '.topic-title-editable', 'input');
 
 		$('.posts-list').on('click', '.topic-category[data-editable]', function () {
-			var $this = $(this);
-			var id = $this.parents('[data-id]').attr('data-id');
+			const $this = $(this);
+			const id = $this.parents('[data-id]').attr('data-id');
 			categorySelector.modal({
 				onSubmit: function (selectedCategory) {
 					Promise.all([
@@ -53,7 +75,7 @@ define('forum/post-queue', [
 							cid: selectedCategory.cid,
 						}),
 					]).then(function (result) {
-						var category = result[0];
+						const category = result[0];
 						app.parseAndTranslate('post-queue', 'posts', {
 							posts: [{
 								category: category,
@@ -66,9 +88,7 @@ define('forum/post-queue', [
 								$this.replaceWith(html.find('.topic-category'));
 							}
 						});
-					}).catch(function (err) {
-						app.alertError(err);
-					});
+					}).catch(alerts.error);
 				},
 			});
 			return false;
@@ -79,8 +99,8 @@ define('forum/post-queue', [
 
 	function handleContentEdit(displayClass, editableClass, inputSelector) {
 		$('.posts-list').on('click', displayClass, function () {
-			var el = $(this);
-			var inputEl = el.parent().find(editableClass);
+			const el = $(this);
+			const inputEl = el.parent().find(editableClass);
 			if (inputEl.length) {
 				el.addClass('hidden');
 				inputEl.removeClass('hidden').find(inputSelector).focus();
@@ -88,10 +108,10 @@ define('forum/post-queue', [
 		});
 
 		$('.posts-list').on('blur', editableClass + ' ' + inputSelector, function () {
-			var textarea = $(this);
-			var preview = textarea.parent().parent().find(displayClass);
-			var id = textarea.parents('[data-id]').attr('data-id');
-			var titleEdit = displayClass === '.topic-title';
+			const textarea = $(this);
+			const preview = textarea.parent().parent().find(displayClass);
+			const id = textarea.parents('[data-id]').attr('data-id');
+			const titleEdit = displayClass === '.topic-title';
 
 			socket.emit('posts.editQueuedContent', {
 				id: id,
@@ -99,7 +119,7 @@ define('forum/post-queue', [
 				content: titleEdit ? undefined : textarea.val(),
 			}, function (err, data) {
 				if (err) {
-					return app.alertError(err);
+					return alerts.error(err);
 				}
 				if (titleEdit) {
 					if (preview.find('.title-text').length) {

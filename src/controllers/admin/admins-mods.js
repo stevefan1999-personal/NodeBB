@@ -5,7 +5,6 @@ const _ = require('lodash');
 const db = require('../../database');
 const groups = require('../../groups');
 const categories = require('../../categories');
-const privileges = require('../../privileges');
 const user = require('../../user');
 
 const AdminsMods = module.exports;
@@ -30,7 +29,6 @@ AdminsMods.get = async function (req, res, next) {
 		globalMods: globalMods,
 		categoryMods: [moderators],
 		selectedCategory: selectedCategory,
-		allPrivileges: privileges.categories.userPrivilegeList,
 	});
 };
 

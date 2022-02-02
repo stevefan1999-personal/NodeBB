@@ -1,7 +1,6 @@
 
 'use strict';
 
-const async = require('async');
 const _ = require('lodash');
 
 const db = require('../database');
@@ -71,7 +70,7 @@ module.exports = function (Topics) {
 		});
 		await Promise.all(postData.map(p => posts.parsePost(p)));
 
-		const { tags } = await plugins.hooks.fire('filter:teasers.configureStripTags', { tags: utils.stripTags.concat(['img']) });
+		const { tags } = await plugins.hooks.fire('filter:teasers.configureStripTags', { tags: utils.stripTags.slice(0) });
 
 		const teasers = topics.map((topic, index) => {
 			if (!topic) {
@@ -111,12 +110,12 @@ module.exports = function (Topics) {
 			return teasers;
 		}
 
-		return await async.mapSeries(teasers, async (postData) => {
+		return await Promise.all(teasers.map(async (postData) => {
 			if (blockedUids.includes(parseInt(postData.uid, 10))) {
 				return await getPreviousNonBlockedPost(postData, blockedUids);
 			}
 			return postData;
-		});
+		}));
 	}
 
 	async function getPreviousNonBlockedPost(postData, blockedUids) {

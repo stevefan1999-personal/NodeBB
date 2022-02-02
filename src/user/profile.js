@@ -2,9 +2,9 @@
 'use strict';
 
 const _ = require('lodash');
-const async = require('async');
 const validator = require('validator');
 const winston = require('winston');
+const punycode = require('punycode');
 
 const utils = require('../utils');
 const slugify = require('../slugify');
@@ -38,24 +38,41 @@ module.exports = function (User) {
 		await validateData(uid, data);
 
 		const oldData = await User.getUserFields(updateUid, fields);
-
-		await async.each(fields, async (field) => {
+		const updateData = {};
+		await Promise.all(fields.map(async (field) => {
 			if (!(data[field] !== undefined && typeof data[field] === 'string')) {
 				return;
 			}
 
 			data[field] = data[field].trim();
 
-			if (field === 'email') {
-				return await updateEmail(updateUid, data.email);
-			} else if (field === 'username') {
-				return await updateUsername(updateUid, data.username);
-			} else if (field === 'fullname') {
-				return await updateFullname(updateUid, data.fullname);
-			}
+			switch (field) {
+				case 'email': {
+					return await updateEmail(updateUid, data.email);
+				}
 
-			await User.setUserField(updateUid, field, data[field]);
-		});
+				case 'username': {
+					return await updateUsername(updateUid, data.username);
+				}
+
+				case 'fullname': {
+					return await updateFullname(updateUid, data.fullname);
+				}
+
+				case 'website': {
+					updateData[field] = punycode.toASCII(data[field]);
+					break;
+				}
+
+				default: {
+					updateData[field] = data[field];
+				}
+			}
+		}));
+
+		if (Object.keys(updateData).length) {
+			await User.setUserFields(updateUid, updateData);
+		}
 
 		plugins.hooks.fire('action:user.updateProfile', {
 			uid: uid,
@@ -71,7 +88,7 @@ module.exports = function (User) {
 	};
 
 	async function validateData(callerUid, data) {
-		await isEmailAvailable(data, data.uid);
+		await isEmailValid(data);
 		await isUsernameAvailable(data, data.uid);
 		await isWebsiteValid(callerUid, data);
 		await isAboutMeValid(callerUid, data);
@@ -82,7 +99,7 @@ module.exports = function (User) {
 		isGroupTitleValid(data);
 	}
 
-	async function isEmailAvailable(data, uid) {
+	async function isEmailValid(data) {
 		if (!data.email) {
 			return;
 		}
@@ -90,14 +107,6 @@ module.exports = function (User) {
 		data.email = data.email.trim();
 		if (!utils.isEmailValid(data.email)) {
 			throw new Error('[[error:invalid-email]]');
-		}
-		const email = await User.getUserField(uid, 'email');
-		if (email === data.email) {
-			return;
-		}
-		const available = await User.email.available(data.email);
-		if (!available) {
-			throw new Error('[[error:email-taken]]');
 		}
 	}
 
@@ -243,6 +252,7 @@ module.exports = function (User) {
 			return;
 		}
 
+		// 👉 Looking for email change logic? src/user/email.js (UserEmail.confirmByUid)
 		if (newEmail) {
 			await User.email.sendValidationEmail(uid, {
 				email: newEmail,

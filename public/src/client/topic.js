@@ -7,42 +7,33 @@ define('forum/topic', [
 	'forum/topic/postTools',
 	'forum/topic/events',
 	'forum/topic/posts',
-	'forum/topic/images',
 	'navigator',
 	'sort',
 	'components',
 	'storage',
 	'hooks',
+	'api',
+	'alerts',
 ], function (
 	infinitescroll, threadTools, postTools,
-	events, posts, images, navigator, sort,
-	components, storage, hooks
+	events, posts, navigator, sort,
+	components, storage, hooks, api, alerts
 ) {
-	var	Topic = {};
-	var currentUrl = '';
+	const Topic = {};
+	let currentUrl = '';
 
 	$(window).on('action:ajaxify.start', function (ev, data) {
-		if (Topic.replaceURLTimeout) {
-			clearTimeout(Topic.replaceURLTimeout);
-			Topic.replaceURLTimeout = 0;
-		}
 		events.removeListeners();
 
 		if (!String(data.url).startsWith('topic/')) {
 			navigator.disable();
 			components.get('navbar/title').find('span').text('').hide();
-			app.removeAlert('bookmark');
-
-			require(['search'], function (search) {
-				if (search.topicDOM.active) {
-					search.topicDOM.end();
-				}
-			});
+			alerts.remove('bookmark');
 		}
 	});
 
 	Topic.init = function () {
-		var tid = ajaxify.data.tid;
+		const tid = ajaxify.data.tid;
 		currentUrl = ajaxify.currentPage;
 		hooks.fire('action:topic.loading');
 
@@ -50,7 +41,7 @@ define('forum/topic', [
 
 		posts.onTopicPageLoad(components.get('post'));
 
-		navigator.init('[component="post"]', ajaxify.data.postcount, Topic.toTop, Topic.toBottom, Topic.navigatorCallback);
+		navigator.init('[component="post"]', ajaxify.data.postcount, Topic.toTop, Topic.toBottom, utils.debounce(Topic.navigatorCallback, 500));
 
 		postTools.init(tid);
 		threadTools.init(tid, $('.topic'));
@@ -66,12 +57,11 @@ define('forum/topic', [
 		addParentHandler();
 		addDropupHandler();
 		addRepliesHandler();
-
-
+		addPostsPreviewHandler();
 
 		handleBookmark(tid);
 
-		$(window).on('scroll', updateTopicTitle);
+		$(window).on('scroll', utils.debounce(updateTopicTitle, 250));
 
 		handleTopicSearch();
 
@@ -79,28 +69,13 @@ define('forum/topic', [
 	};
 
 	function handleTopicSearch() {
-		$('.topic-search').off('click')
-			.on('click', '.prev', function () {
-				require(['search'], function (search) {
-					search.topicDOM.prev();
-				});
-			})
-			.on('click', '.next', function () {
-				require(['search'], function (search) {
-					search.topicDOM.next();
-				});
-			});
-
 		if (config.topicSearchEnabled) {
-			require(['mousetrap'], function (mousetrap) {
+			require(['mousetrap', 'search'], function (mousetrap, search) {
 				mousetrap.bind(['command+f', 'ctrl+f'], function (e) {
-					var match = ajaxify.currentPage.match(/^topic\/([\d]+)/);
-					var tid;
-					if (match) {
+					if (ajaxify.data.template.topic) {
 						e.preventDefault();
-						tid = match[1];
-						$('#search-fields input').val('in:topic-' + tid + ' ');
-						app.prepareSearch();
+						$('#search-fields input').val('in:topic-' + ajaxify.data.tid + ' ');
+						search.showAndFocusInput();
 					}
 				});
 			});
@@ -114,7 +89,7 @@ define('forum/topic', [
 	Topic.toBottom = function () {
 		socket.emit('topics.postcount', ajaxify.data.tid, function (err, postCount) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 
 			navigator.scrollBottom(postCount - 1);
@@ -123,13 +98,13 @@ define('forum/topic', [
 
 	function handleBookmark(tid) {
 		if (window.location.hash) {
-			var el = $(utils.escapeHTML(window.location.hash));
+			const el = $(utils.escapeHTML(window.location.hash));
 			if (el.length) {
 				return navigator.scrollToElement(el, true, 0);
 			}
 		}
-		var bookmark = ajaxify.data.bookmark || storage.getItem('topic:' + tid + ':bookmark');
-		var postIndex = ajaxify.data.postIndex;
+		const bookmark = ajaxify.data.bookmark || storage.getItem('topic:' + tid + ':bookmark');
+		const postIndex = ajaxify.data.postIndex;
 
 		if (postIndex > 1) {
 			if (components.get('post/anchor', postIndex - 1).length) {
@@ -139,7 +114,7 @@ define('forum/topic', [
 			!config.usePagination ||
 			(config.usePagination && ajaxify.data.pagination.currentPage === 1)
 		) && ajaxify.data.postcount > ajaxify.data.bookmarkThreshold) {
-			app.alert({
+			alerts.alert({
 				alert_id: 'bookmark',
 				message: '[[topic:bookmark_instructions]]',
 				timeout: 0,
@@ -152,26 +127,26 @@ define('forum/topic', [
 				},
 			});
 			setTimeout(function () {
-				app.removeAlert('bookmark');
+				alerts.remove('bookmark');
 			}, 10000);
 		}
 	}
 
 	function addBlockQuoteHandler() {
 		components.get('topic').on('click', 'blockquote .toggle', function () {
-			var blockQuote = $(this).parent('blockquote');
-			var toggle = $(this);
+			const blockQuote = $(this).parent('blockquote');
+			const toggle = $(this);
 			blockQuote.toggleClass('uncollapsed');
-			var collapsed = !blockQuote.hasClass('uncollapsed');
+			const collapsed = !blockQuote.hasClass('uncollapsed');
 			toggle.toggleClass('fa-angle-down', collapsed).toggleClass('fa-angle-up', !collapsed);
 		});
 	}
 
 	function addParentHandler() {
 		components.get('topic').on('click', '[component="post/parent"]', function (e) {
-			var toPid = $(this).attr('data-topid');
+			const toPid = $(this).attr('data-topid');
 
-			var toPost = $('[component="topic"]>[component="post"][data-pid="' + toPid + '"]');
+			const toPost = $('[component="topic"]>[component="post"][data-pid="' + toPid + '"]');
 			if (toPost.length) {
 				e.preventDefault();
 				navigator.scrollToIndex(toPost.attr('data-index'), true);
@@ -182,78 +157,130 @@ define('forum/topic', [
 
 	function addDropupHandler() {
 		// Locate all dropdowns
-		var target = $('#content .dropdown-menu').parent();
+		const target = $('#content .dropdown-menu').parent();
 
 		// Toggle dropup if past 50% of screen
 		$(target).on('show.bs.dropdown', function () {
-			var dropUp = this.getBoundingClientRect().top > ($(window).height() / 2);
+			const dropUp = this.getBoundingClientRect().top > ($(window).height() / 2);
 			$(this).toggleClass('dropup', dropUp);
 		});
 	}
 
 	function addRepliesHandler() {
 		$('[component="topic"]').on('click', '[component="post/reply-count"]', function () {
-			var btn = $(this);
+			const btn = $(this);
 			require(['forum/topic/replies'], function (replies) {
 				replies.init(btn);
 			});
 		});
 	}
 
+	function addPostsPreviewHandler() {
+		if (!ajaxify.data.showPostPreviewsOnHover || utils.isMobile()) {
+			return;
+		}
+		let timeoutId = 0;
+		const postCache = {};
+		$(window).one('action:ajaxify.start', function () {
+			clearTimeout(timeoutId);
+			$('#post-tooltip').remove();
+		});
+		$('[component="topic"]').on('mouseenter', '[component="post"] a, [component="topic/event"] a', async function () {
+			const link = $(this);
+
+			async function renderPost(pid) {
+				const postData = postCache[pid] || await socket.emit('posts.getPostSummaryByPid', { pid: pid });
+				$('#post-tooltip').remove();
+				if (postData && ajaxify.data.template.topic) {
+					postCache[pid] = postData;
+					const tooltip = await app.parseAndTranslate('partials/topic/post-preview', { post: postData });
+					tooltip.hide().find('.timeago').timeago();
+					tooltip.appendTo($('body')).fadeIn(300);
+					const postContent = link.parents('[component="topic"]').find('[component="post/content"]').first();
+					const postRect = postContent.offset();
+					const postWidth = postContent.width();
+					const linkRect = link.offset();
+					tooltip.css({
+						top: linkRect.top + 30,
+						left: postRect.left,
+						width: postWidth,
+					});
+				}
+			}
+
+			const href = link.attr('href');
+			const location = utils.urlToLocation(href);
+			const pathname = location.pathname;
+			const validHref = href && href !== '#' && window.location.hostname === location.hostname;
+			$('#post-tooltip').remove();
+			const postMatch = validHref && pathname && pathname.match(/\/post\/([\d]+)/);
+			const topicMatch = validHref && pathname && pathname.match(/\/topic\/([\d]+)/);
+			if (postMatch) {
+				const pid = postMatch[1];
+				if (parseInt(link.parents('[component="post"]').attr('data-pid'), 10) === parseInt(pid, 10)) {
+					return; // dont render self post
+				}
+
+				timeoutId = setTimeout(async () => {
+					renderPost(pid);
+				}, 300);
+			} else if (topicMatch) {
+				timeoutId = setTimeout(async () => {
+					const tid = topicMatch[1];
+					const topicData = await api.get('/topics/' + tid, {});
+					renderPost(topicData.mainPid);
+				}, 300);
+			}
+		}).on('mouseleave', '[component="post"] a, [component="topic/event"] a', function () {
+			clearTimeout(timeoutId);
+			$('#post-tooltip').remove();
+		});
+	}
+
 	function updateTopicTitle() {
-		var span = components.get('navbar/title').find('span');
+		const span = components.get('navbar/title').find('span');
 		if ($(window).scrollTop() > 50 && span.hasClass('hidden')) {
 			span.html(ajaxify.data.title).removeClass('hidden');
 		} else if ($(window).scrollTop() <= 50 && !span.hasClass('hidden')) {
 			span.html('').addClass('hidden');
 		}
 		if ($(window).scrollTop() > 300) {
-			app.removeAlert('bookmark');
+			alerts.remove('bookmark');
 		}
 	}
 
 	Topic.navigatorCallback = function (index, elementCount) {
-		var path = ajaxify.removeRelativePath(window.location.pathname.slice(1));
-		if (!path.startsWith('topic')) {
+		if (!ajaxify.data.template.topic || navigator.scrollActive) {
 			return;
 		}
 
-		if (navigator.scrollActive) {
-			return;
-		}
-
-		var newUrl = 'topic/' + ajaxify.data.slug + (index > 1 ? ('/' + index) : '');
+		const newUrl = 'topic/' + ajaxify.data.slug + (index > 1 ? ('/' + index) : '');
 		if (newUrl !== currentUrl) {
-			if (Topic.replaceURLTimeout) {
-				clearTimeout(Topic.replaceURLTimeout);
-				Topic.replaceURLTimeout = 0;
-			}
 			currentUrl = newUrl;
-			Topic.replaceURLTimeout = setTimeout(function () {
-				if (index >= elementCount && app.user.uid) {
-					socket.emit('topics.markAsRead', [ajaxify.data.tid]);
+
+			if (index >= elementCount && app.user.uid) {
+				socket.emit('topics.markAsRead', [ajaxify.data.tid]);
+			}
+
+			updateUserBookmark(index);
+
+			Topic.replaceURLTimeout = 0;
+			if (ajaxify.data.updateUrlWithPostIndex && history.replaceState) {
+				let search = window.location.search || '';
+				if (!config.usePagination) {
+					search = (search && !/^\?page=\d+$/.test(search) ? search : '');
 				}
 
-				updateUserBookmark(index);
-
-				Topic.replaceURLTimeout = 0;
-				if (ajaxify.data.updateUrlWithPostIndex && history.replaceState) {
-					var search = window.location.search || '';
-					if (!config.usePagination) {
-						search = (search && !/^\?page=\d+$/.test(search) ? search : '');
-					}
-
-					history.replaceState({
-						url: newUrl + search,
-					}, null, window.location.protocol + '//' + window.location.host + config.relative_path + '/' + newUrl + search);
-				}
-			}, 500);
+				history.replaceState({
+					url: newUrl + search,
+				}, null, window.location.protocol + '//' + window.location.host + config.relative_path + '/' + newUrl + search);
+			}
 		}
 	};
 
 	function updateUserBookmark(index) {
-		var bookmarkKey = 'topic:' + ajaxify.data.tid + ':bookmark';
-		var currentBookmark = ajaxify.data.bookmark || storage.getItem(bookmarkKey);
+		const bookmarkKey = 'topic:' + ajaxify.data.tid + ':bookmark';
+		const currentBookmark = ajaxify.data.bookmark || storage.getItem(bookmarkKey);
 		if (config.topicPostSort === 'newest_to_oldest') {
 			index = Math.max(1, ajaxify.data.postcount - index + 2);
 		}
@@ -272,7 +299,7 @@ define('forum/topic', [
 					index: index,
 				}, function (err) {
 					if (err) {
-						return app.alertError(err.message);
+						return alerts.error(err);
 					}
 					ajaxify.data.bookmark = index + 1;
 				});
@@ -283,7 +310,7 @@ define('forum/topic', [
 
 		// removes the bookmark alert when we get to / past the bookmark
 		if (!currentBookmark || parseInt(index, 10) >= parseInt(currentBookmark, 10)) {
-			app.removeAlert('bookmark');
+			alerts.remove('bookmark');
 		}
 	}
 

@@ -1,11 +1,11 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const winston = require('winston');
 const semver = require('semver');
 const nconf = require('nconf');
+const chalk = require('chalk');
 const request = require('request-promise-native');
 
 const user = require('../user');
@@ -24,23 +24,6 @@ require('./load')(Plugins);
 require('./usage')(Plugins);
 Plugins.data = require('./data');
 Plugins.hooks = require('./hooks');
-
-// Backwards compatibility for hooks, remove in v1.18.0
-const _deprecate = async function (...args) {
-	const oldMethod = args.shift();
-	const newMethod = args.shift();
-	const method = args.shift();
-	const stack = new Error().stack.toString().split(os.EOL);
-	const context = stack[stack.findIndex(line => line.startsWith('    at Object.wrapperCallback')) + 1];
-	winston.warn(`[plugins/hooks] ${oldMethod} has been deprecated, call ${newMethod} instead.`);
-	winston.warn(`[plugins/hooks] ${context}`);
-	return method.apply(Plugins.hooks, args);
-};
-Plugins.registerHook = _deprecate.bind(null, 'Plugins.registerHook', 'Plugins.hooks.register', Plugins.hooks.register);
-Plugins.unregisterHook = _deprecate.bind(null, 'Plugins.unregisterHook', 'Plugins.hooks.unregister', Plugins.hooks.unregister);
-Plugins.fireHook = _deprecate.bind(null, 'Plugins.fireHook', 'Plugins.hooks.fire', Plugins.hooks.fire);
-Plugins.hasListeners = _deprecate.bind(null, 'Plugins.hasListeners', 'Plugins.hooks.hasListeners', Plugins.hooks.hasListeners);
-// end
 
 Plugins.getPluginPaths = Plugins.data.getPluginPaths;
 Plugins.loadPluginInfo = Plugins.data.loadPluginInfo;
@@ -135,7 +118,7 @@ Plugins.reload = async function () {
 		console.log('');
 		winston.warn('[plugins/load] The following plugins may not be compatible with your version of NodeBB. This may cause unintended behaviour or crashing. In the event of an unresponsive NodeBB caused by this plugin, run `./nodebb reset -p PLUGINNAME` to disable it.');
 		for (let x = 0, numPlugins = Plugins.versionWarning.length; x < numPlugins; x += 1) {
-			console.log('  * '.yellow + Plugins.versionWarning[x]);
+			console.log(`${chalk.yellow('  * ') + Plugins.versionWarning[x]}`);
 		}
 		console.log('');
 	}

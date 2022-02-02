@@ -1,22 +1,25 @@
 FROM node:lts-alpine3.14
 
-RUN apk add --no-cache git fuse-overlayfs
-WORKDIR /usr/src/app/base
+RUN mkdir -p /usr/src/app && \
+    chown -R node:node /usr/src/app
+WORKDIR /usr/src/app
 
 ARG NODE_ENV
 ENV NODE_ENV $NODE_ENV
 
-COPY install/package.json package.json
+COPY --chown=node:node install/package.json /usr/src/app/package.json
+
+USER node
 
 RUN npm install --only=prod && \
     npm cache clean --force
-    
-COPY . .
+
+COPY --chown=node:node . /usr/src/app
 
 ENV NODE_ENV=production \
     daemon=false \
     silent=false
 
 EXPOSE 4567
-ENTRYPOINT ["./docker-entrypoint.sh"]
-VOLUME ["/mnt/nodebb/user-dir"]
+VOLUME ["/usr/src/app/node_modules", "/usr/src/app/build", "/usr/src/app/public/uploads"]
+CMD node ./nodebb build ;  node ./nodebb start

@@ -94,10 +94,12 @@
     "digest_off": "כבוי",
     "digest_daily": "יומי",
     "digest_weekly": "שבועי",
+    "digest_biweekly": "דו שבועי",
     "digest_monthly": "חודשי",
     "has_no_follower": "למשתמש זה אין עוקבים :(",
     "follows_no_one": "משתמש זה אינו עוקב אחרי אחרים :(",
     "has_no_posts": "המשתמש טרם יצר פוסטים כלשהם.",
+    "has_no_best_posts": "למשתמש זה אין עדיין פוסטים נבחרים.",
     "has_no_topics": "המשתמש טרם יצר נושאים כלשהם.",
     "has_no_watched_topics": "המשתמש טרם צפה בנושאים כלשהם.",
     "has_no_ignored_topics": "המשתמש הזה טרם התעלם מנושאים.",
@@ -182,6 +184,7 @@
     "consent.export_posts": "יצוא פוסטים (CVS.)",
     "consent.export-posts-success": "ייצוא הפוסטים מתבצע כעת. תקבל התראה כאשר הייצוא יסתיים.",
     "emailUpdate.intro": "אנא הכנס את כתובת הדוא\"ל שלך. הפורום משתמש בדוא\"ל שלך לשליחת תקציר מתוזמן והתראות, כמו כן לשחזור חשבון במקרה ששוכחים את הסיסמה.",
-    "emailUpdate.optional": "<strong>שדה זו אוופציונלי</strong>. אינך מחויב לספק את כתובת הדוא\"ל שלך, אבל בלי כתובת דוא\"ל מאומת, לא תוכל לשחזר את החשבון שלך.",
+    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email you will not be able to recover your account or login with your email.",
+    "emailUpdate.required": "<strong>This field is required</strong>.",
     "emailUpdate.change-instructions": "מייל אימות יישלח לכתובת דוא\"ל שהכנסת עם קישור ייחודי. לחיצה על הקישור יאמת את בעלותך על הדוא\"ל ותקבל גישה לחשבונך. בכל זמן, תוכל לעדכן את כתובת הדוא\"ל שלך בדף החשבון שלך."
 }

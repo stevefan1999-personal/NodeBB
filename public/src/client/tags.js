@@ -1,34 +1,24 @@
 'use strict';
 
 
-define('forum/tags', ['forum/infinitescroll'], function (infinitescroll) {
-	var Tags = {};
-	var timeoutId = 0;
+define('forum/tags', ['forum/infinitescroll', 'alerts'], function (infinitescroll, alerts) {
+	const Tags = {};
 
 	Tags.init = function () {
 		app.enterRoom('tags');
 		$('#tag-search').focus();
-		$('#tag-search').on('input propertychange', function () {
-			if (timeoutId) {
-				clearTimeout(timeoutId);
-				timeoutId = 0;
-			}
-
+		$('#tag-search').on('input propertychange', utils.debounce(function () {
 			if (!$('#tag-search').val().length) {
 				return resetSearch();
 			}
 
-			timeoutId = setTimeout(function () {
-				socket.emit('topics.searchAndLoadTags', { query: $('#tag-search').val() }, function (err, results) {
-					if (err) {
-						return app.alertError(err.message);
-					}
-					onTagsLoaded(results.tags, true, function () {
-						timeoutId = 0;
-					});
-				});
-			}, 250);
-		});
+			socket.emit('topics.searchAndLoadTags', { query: $('#tag-search').val() }, function (err, results) {
+				if (err) {
+					return alerts.error(err);
+				}
+				onTagsLoaded(results.tags, true);
+			});
+		}, 250));
 
 		infinitescroll.init(Tags.loadMoreTags);
 	};
@@ -55,7 +45,7 @@ define('forum/tags', ['forum/infinitescroll'], function (infinitescroll) {
 			after: 0,
 		}, function (err, data) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 			onTagsLoaded(data.tags, true);
 		});

@@ -2,15 +2,15 @@
 
 
 define('forum/topic/change-owner', [
-	'components',
 	'postSelect',
 	'autocomplete',
-], function (components, postSelect, autocomplete) {
-	var ChangeOwner = {};
+	'alerts',
+], function (postSelect, autocomplete, alerts) {
+	const ChangeOwner = {};
 
-	var modal;
-	var commit;
-	var toUid = 0;
+	let modal;
+	let commit;
+	let toUid = 0;
 	ChangeOwner.init = function (postEl) {
 		if (modal) {
 			return;
@@ -71,7 +71,7 @@ define('forum/topic/change-owner', [
 		}
 		socket.emit('posts.changeOwner', { pids: postSelect.pids, toUid: toUid }, function (err) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 			ajaxify.refresh();
 

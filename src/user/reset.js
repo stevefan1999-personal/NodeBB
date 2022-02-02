@@ -91,19 +91,23 @@ UserReset.commit = async function (code, password) {
 	// don't verify email if password reset is due to expiry
 	const isPasswordExpired = userData.passwordExpiry && userData.passwordExpiry < Date.now();
 	if (!isPasswordExpired) {
-		data['email:confirmed']	= 1;
+		data['email:confirmed'] = 1;
 		await groups.join('verified-users', uid);
 		await groups.leave('unverified-users', uid);
 	}
-	await user.setUserFields(uid, data);
-	await db.deleteObjectField('reset:uid', code);
-	await db.sortedSetRemoveBulk([
-		['reset:issueDate', code],
-		['reset:issueDate:uid', uid],
+
+	await Promise.all([
+		user.setUserFields(uid, data),
+		db.deleteObjectField('reset:uid', code),
+		db.sortedSetRemoveBulk([
+			['reset:issueDate', code],
+			['reset:issueDate:uid', uid],
+		]),
+		user.reset.updateExpiry(uid),
+		user.auth.resetLockout(uid),
+		user.auth.revokeAllSessions(uid),
+		user.email.expireValidation(uid),
 	]);
-	await user.reset.updateExpiry(uid);
-	await user.auth.resetLockout(uid);
-	await user.email.expireValidation(uid);
 };
 
 UserReset.updateExpiry = async function (uid) {

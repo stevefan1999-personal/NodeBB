@@ -31,6 +31,9 @@ const relative_path = nconf.get('relative_path');
 middleware.buildHeader = helpers.try(async (req, res, next) => {
 	res.locals.renderHeader = true;
 	res.locals.isAPI = false;
+	if (req.method === 'GET') {
+		await require('./index').applyCSRFasync(req, res);
+	}
 	const [config, canLoginIfBanned] = await Promise.all([
 		controllers.api.loadConfig(req),
 		user.bans.canLoginIfBanned(req.uid),
@@ -61,6 +64,7 @@ middleware.renderHeader = async function renderHeader(req, res, data) {
 		'brand:logo:display': meta.config['brand:logo'] ? '' : 'hide',
 		allowRegistration: registrationType === 'normal',
 		searchEnabled: plugins.hooks.hasListeners('filter:search.query'),
+		postQueueEnabled: !!meta.config.postQueue,
 		config: res.locals.config,
 		relative_path,
 		bodyClass: data.bodyClass,

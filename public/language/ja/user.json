@@ -94,10 +94,12 @@
     "digest_off": "オフ",
     "digest_daily": "デイリー",
     "digest_weekly": "ウィークリー",
+    "digest_biweekly": "Bi-Weekly",
     "digest_monthly": "マンスリー",
     "has_no_follower": "フォロワーはまだいません :(",
     "follows_no_one": "フォロー中のユーザーはまだいません :(",
     "has_no_posts": "このユーザーはまだ一つも投稿していません",
+    "has_no_best_posts": "This user does not have any upvoted posts yet.",
     "has_no_topics": "このユーザーはまだ一つもスレッドを作っていません",
     "has_no_watched_topics": "このユーザーはまだ一つもスレッドをウォッチしていません",
     "has_no_ignored_topics": "この利用者はまだトピックを無視していません。",
@@ -182,6 +184,7 @@
     "consent.export_posts": "投稿をエクスポート (.csv)",
     "consent.export-posts-success": "Exporting posts, you will get a notification when it is complete.",
     "emailUpdate.intro": "Please enter your email address below. This forum uses your email address for scheduled digest and notifications, as well as for account recovery in the event of a lost password.",
-    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email, you will not be able to recover your account.",
+    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email you will not be able to recover your account or login with your email.",
+    "emailUpdate.required": "<strong>This field is required</strong>.",
     "emailUpdate.change-instructions": "A confirmation email will be sent to the entered email address with a unique link. Accessing that link will confirm your ownership of the email address and it will become active on your account. At any time, you are able to update your email on file from within your account page."
 }

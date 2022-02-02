@@ -1,11 +1,11 @@
 'use strict';
 
 
-define('flags', ['hooks', 'components', 'api'], function (hooks, components, api) {
-	var Flag = {};
-	var flagModal;
-	var flagCommit;
-	var flagReason;
+define('flags', ['hooks', 'components', 'api', 'alerts'], function (hooks, components, api, alerts) {
+	const Flag = {};
+	let flagModal;
+	let flagCommit;
+	let flagReason;
 
 	Flag.showFlagModal = function (data) {
 		app.parseAndTranslate('partials/modals/flag_modal', data, function (html) {
@@ -30,8 +30,8 @@ define('flags', ['hooks', 'components', 'api'], function (hooks, components, api
 			});
 
 			flagCommit.on('click', function () {
-				var selected = $('input[name="flag-reason"]:checked');
-				var reason = selected.val();
+				const selected = $('input[name="flag-reason"]:checked');
+				let reason = selected.val();
 				if (selected.attr('id') === 'flag-reason-other') {
 					reason = flagReason.val();
 				}
@@ -57,25 +57,25 @@ define('flags', ['hooks', 'components', 'api'], function (hooks, components, api
 		api.put(`/flags/${flagId}`, {
 			state: 'resolved',
 		}).then(() => {
-			app.alertSuccess('[[flags:resolved]]');
+			alerts.success('[[flags:resolved]]');
 			hooks.fire('action:flag.resolved', { flagId: flagId });
-		}).catch(app.alertError);
+		}).catch(alerts.error);
 	};
 
 	function createFlag(type, id, reason) {
 		if (!type || !id || !reason) {
 			return;
 		}
-		var data = { type: type, id: id, reason: reason };
+		const data = { type: type, id: id, reason: reason };
 		api.post('/flags', data, function (err, flagId) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 
 			flagModal.modal('hide');
-			app.alertSuccess('[[flags:modal-submit-success]]');
+			alerts.success('[[flags:modal-submit-success]]');
 			if (type === 'post') {
-				var postEl = components.get('post', 'pid', id);
+				const postEl = components.get('post', 'pid', id);
 				postEl.find('[component="post/flag"]').addClass('hidden').parent().attr('hidden', '');
 				postEl.find('[component="post/already-flagged"]').removeClass('hidden').parent().attr('hidden', null);
 			}

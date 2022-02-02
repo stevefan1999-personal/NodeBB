@@ -14,5 +14,8 @@
 	"reply": "Répondre",
 	"topic": "Sujet",
 	"accept": "Accepter",
-	"reject": "Refuser"
+	"reject": "Refuser",
+	"remove": "Enlever",
+	"notify": "Notifier",
+	"notify-user": "Notifier l'utilisateur"
 }

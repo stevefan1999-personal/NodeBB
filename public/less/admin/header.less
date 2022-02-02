@@ -23,6 +23,10 @@
 		flex-direction: row-reverse;
 		margin: 0;
 
+		li {
+			align-self: end;
+		}
+
 		> * {
 			margin-right: 20px;
 		}
@@ -88,6 +92,10 @@
 		}
 	}
 
+	#main-menu > li {
+		padding-bottom: 10px;
+	}
+
 	> ul {
 		list-style-type: none;
 		padding: 0px;
@@ -98,10 +106,15 @@
 		> li {
 			float: left;
 			margin-right: 30px;
+			border-bottom: 4px solid transparent;
+			transition: border-color 150ms linear;
+
+			&:hover {
+				border-color: darken(@brand-primary, 20%);
+			}
 
 			&.active {
-				border-bottom: 4px solid @brand-primary;
-    			padding-bottom: 10px;
+				border-color: @brand-primary;
 			}
 
 			> a {

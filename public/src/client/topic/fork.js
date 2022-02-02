@@ -1,11 +1,11 @@
 'use strict';
 
 
-define('forum/topic/fork', ['components', 'postSelect'], function (components, postSelect) {
-	var Fork = {};
-	var forkModal;
-	var forkCommit;
-	var fromTid;
+define('forum/topic/fork', ['components', 'postSelect', 'alerts'], function (components, postSelect, alerts) {
+	const Fork = {};
+	let forkModal;
+	let forkCommit;
+	let fromTid;
 
 	Fork.init = function () {
 		fromTid = ajaxify.data.tid;
@@ -57,10 +57,10 @@ define('forum/topic/fork', ['components', 'postSelect'], function (components, p
 			}
 			forkCommit.removeAttr('disabled');
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err.message);
 			}
 
-			app.alert({
+			alerts.alert({
 				timeout: 5000,
 				title: '[[global:alert.success]]',
 				message: '[[topic:fork_success]]',

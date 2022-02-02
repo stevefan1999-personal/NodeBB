@@ -1,19 +1,19 @@
 'use strict';
 
 
-define('admin/appearance/themes', ['translator'], function (translator) {
-	var Themes = {};
+define('admin/appearance/themes', ['bootbox', 'translator', 'alerts'], function (bootbox, translator, alerts) {
+	const Themes = {};
 
 	Themes.init = function () {
 		$('#installed_themes').on('click', function (e) {
-			var target = $(e.target);
-			var action = target.attr('data-action');
+			const target = $(e.target);
+			const action = target.attr('data-action');
 
 			if (action && action === 'use') {
-				var parentEl = target.parents('[data-theme]');
-				var themeType = parentEl.attr('data-type');
-				var cssSrc = parentEl.attr('data-css');
-				var themeId = parentEl.attr('data-theme');
+				const parentEl = target.parents('[data-theme]');
+				const themeType = parentEl.attr('data-type');
+				const cssSrc = parentEl.attr('data-css');
+				const themeId = parentEl.attr('data-theme');
 
 				socket.emit('admin.themes.set', {
 					type: themeType,
@@ -21,12 +21,12 @@ define('admin/appearance/themes', ['translator'], function (translator) {
 					src: cssSrc,
 				}, function (err) {
 					if (err) {
-						return app.alertError(err.message);
+						return alerts.error(err);
 					}
 					config['theme:id'] = themeId;
 					highlightSelectedTheme(themeId);
 
-					app.alert({
+					alerts.alert({
 						alert_id: 'admin:theme',
 						type: 'info',
 						title: '[[admin/appearance/themes:theme-changed]]',
@@ -50,10 +50,10 @@ define('admin/appearance/themes', ['translator'], function (translator) {
 						id: 'nodebb-theme-persona',
 					}, function (err) {
 						if (err) {
-							return app.alertError(err.message);
+							return alerts.error(err);
 						}
 						highlightSelectedTheme('nodebb-theme-persona');
-						app.alert({
+						alerts.alert({
 							alert_id: 'admin:theme',
 							type: 'success',
 							title: '[[admin/appearance/themes:theme-changed]]',
@@ -67,10 +67,10 @@ define('admin/appearance/themes', ['translator'], function (translator) {
 
 		socket.emit('admin.themes.getInstalled', function (err, themes) {
 			if (err) {
-				return app.alertError(err.message);
+				return alerts.error(err);
 			}
 
-			var instListEl = $('#installed_themes');
+			const instListEl = $('#installed_themes');
 
 			if (!themes.length) {
 				instListEl.append($('<li/ >').addClass('no-themes').translateHtml('[[admin/appearance/themes:no-themes]]'));
@@ -88,8 +88,8 @@ define('admin/appearance/themes', ['translator'], function (translator) {
 	function highlightSelectedTheme(themeId) {
 		translator.translate('[[admin/appearance/themes:select-theme]]  ||  [[admin/appearance/themes:current-theme]]', function (text) {
 			text = text.split('  ||  ');
-			var select = text[0];
-			var current = text[1];
+			const select = text[0];
+			const current = text[1];
 
 			$('[data-theme]')
 				.removeClass('selected')

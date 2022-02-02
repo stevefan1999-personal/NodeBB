@@ -2,8 +2,8 @@
 'use strict';
 
 
-define('autocomplete', ['api'], function (api) {
-	var module = {};
+define('autocomplete', ['api', 'alerts'], function (api, alerts) {
+	const module = {};
 
 	module.user = function (input, params, onselect) {
 		if (typeof params === 'function') {
@@ -25,12 +25,12 @@ define('autocomplete', ['api'], function (api) {
 
 					api.get('/api/users', params, function (err, result) {
 						if (err) {
-							return app.alertError(err.message);
+							return alerts.error(err);
 						}
 
 						if (result && result.users) {
-							var names = result.users.map(function (user) {
-								var username = $('<div></div>').html(user.username).text();
+							const names = result.users.map(function (user) {
+								const username = $('<div></div>').html(user.username).text();
 								return user && {
 									label: username,
 									value: username,
@@ -72,10 +72,10 @@ define('autocomplete', ['api'], function (api) {
 						query: request.term,
 					}, function (err, results) {
 						if (err) {
-							return app.alertError(err.message);
+							return alerts.error(err);
 						}
 						if (results && results.length) {
-							var names = results.map(function (group) {
+							const names = results.map(function (group) {
 								return group && {
 									label: group.name,
 									value: group.name,
@@ -107,7 +107,7 @@ define('autocomplete', ['api'], function (api) {
 						cid: ajaxify.data.cid || 0,
 					}, function (err, tags) {
 						if (err) {
-							return app.alertError(err.message);
+							return alerts.error(err);
 						}
 						if (tags) {
 							response(tags);
@@ -121,7 +121,7 @@ define('autocomplete', ['api'], function (api) {
 
 	function handleOnSelect(input, onselect, event, ui) {
 		onselect = onselect || function () { };
-		var e = jQuery.Event('keypress');
+		const e = jQuery.Event('keypress');
 		e.which = 13;
 		e.keyCode = 13;
 		setTimeout(function () {

@@ -76,6 +76,11 @@ Users.deleteMany = async (req, res) => {
 	helpers.formatApiResponse(200, res);
 };
 
+Users.changePicture = async (req, res) => {
+	await api.users.changePicture(req, { ...req.body, uid: req.params.uid });
+	helpers.formatApiResponse(200, res);
+};
+
 Users.updateSettings = async (req, res) => {
 	const settings = await api.users.updateSettings(req, { ...req.body, uid: req.params.uid });
 	helpers.formatApiResponse(200, res, settings);
@@ -195,7 +200,7 @@ Users.invite = async (req, res) => {
 		return helpers.formatApiResponse(403, res, new Error('[[error:no-privileges]]'));
 	}
 
-	const inviteGroups = await groups.getUserInviteGroups(req.uid);
+	const inviteGroups = (await groups.getUserInviteGroups(req.uid)).map(group => group.name);
 	const cannotInvite = groupsToJoin.some(group => !inviteGroups.includes(group));
 	if (groupsToJoin.length > 0 && cannotInvite) {
 		return helpers.formatApiResponse(403, res, new Error('[[error:no-privileges]]'));
@@ -226,5 +231,53 @@ Users.getInviteGroups = async function (req, res) {
 	}
 
 	const userInviteGroups = await groups.getUserInviteGroups(req.params.uid);
-	return helpers.formatApiResponse(200, res, userInviteGroups);
+	return helpers.formatApiResponse(200, res, userInviteGroups.map(group => group.displayName));
+};
+
+Users.listEmails = async (req, res) => {
+	const [isPrivileged, { showemail }] = await Promise.all([
+		user.isPrivileged(req.uid),
+		user.getSettings(req.params.uid),
+	]);
+	const isSelf = req.uid === parseInt(req.params.uid, 10);
+
+	if (isSelf || isPrivileged || showemail) {
+		const emails = await db.getSortedSetRangeByScore('email:uid', 0, 500, req.params.uid, req.params.uid);
+		helpers.formatApiResponse(200, res, { emails });
+	} else {
+		helpers.formatApiResponse(204, res);
+	}
+};
+
+Users.getEmail = async (req, res) => {
+	const [isPrivileged, { showemail }, exists] = await Promise.all([
+		user.isPrivileged(req.uid),
+		user.getSettings(req.params.uid),
+		db.isSortedSetMember('email:uid', req.params.email.toLowerCase()),
+	]);
+	const isSelf = req.uid === parseInt(req.params.uid, 10);
+
+	if (exists && (isSelf || isPrivileged || showemail)) {
+		helpers.formatApiResponse(204, res);
+	} else {
+		helpers.formatApiResponse(404, res);
+	}
+};
+
+Users.confirmEmail = async (req, res) => {
+	const [exists, canManage] = await Promise.all([
+		db.isSortedSetMember('email:uid', req.params.email.toLowerCase()),
+		privileges.admin.can('admin:users', req.uid),
+	]);
+
+	if (!canManage) {
+		helpers.notAllowed(req, res);
+	}
+
+	if (exists) {
+		await user.email.confirmByUid(req.params.uid);
+		helpers.formatApiResponse(200, res);
+	} else {
+		helpers.formatApiResponse(404, res);
+	}
 };

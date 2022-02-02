@@ -4,6 +4,7 @@ const nconf = require('nconf');
 const url = require('url');
 const winston = require('winston');
 const path = require('path');
+const chalk = require('chalk');
 
 const pkg = require('../package.json');
 const { paths } = require('./constants');
@@ -65,7 +66,7 @@ function loadConfig(configFile) {
 	castAsBool.forEach((prop) => {
 		const value = nconf.get(prop);
 		if (value !== undefined) {
-			nconf.set(prop, typeof value === 'boolean' ? value : String(value).toLowerCase() === 'true');
+			nconf.set(prop, ['1', 1, 'true', true].includes(value));
 		}
 	});
 	nconf.stores.env.readOnly = true;
@@ -111,7 +112,7 @@ function versionCheck() {
 
 	if (!compatible) {
 		winston.warn('Your version of Node.js is too outdated for NodeBB. Please update your version of Node.js.');
-		winston.warn(`Recommended ${range.green}${', '.reset}${version.yellow}${' provided\n'.reset}`);
+		winston.warn(`Recommended ${chalk.green(range)}, ${chalk.yellow(version)} provided\n`);
 	}
 }
 

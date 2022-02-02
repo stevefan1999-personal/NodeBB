@@ -94,10 +94,12 @@
     "digest_off": "Отключена",
     "digest_daily": "Ежедневная",
     "digest_weekly": "Еженедельная",
+    "digest_biweekly": "Bi-Weekly",
     "digest_monthly": "Ежемесячная",
     "has_no_follower": "На этого пользователя никто не подписан :(",
     "follows_no_one": "Этот пользователь ни на кого не подписан :(",
     "has_no_posts": "Этот пользователь ещё ничего не написал.",
+    "has_no_best_posts": "This user does not have any upvoted posts yet.",
     "has_no_topics": "Этот пользователь ещё не создал ни одной темы.",
     "has_no_watched_topics": "Этот пользователь не отслеживает ни одной темы.",
     "has_no_ignored_topics": "Этот пользователь не игнорирует ни одну тему.",
@@ -182,6 +184,7 @@
     "consent.export_posts": "Экспорт сообщений (.csv)",
     "consent.export-posts-success": "Экспорт постов, вы получите уведомление, когда он будет завершен.",
     "emailUpdate.intro": "Please enter your email address below. This forum uses your email address for scheduled digest and notifications, as well as for account recovery in the event of a lost password.",
-    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email, you will not be able to recover your account.",
+    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email you will not be able to recover your account or login with your email.",
+    "emailUpdate.required": "<strong>This field is required</strong>.",
     "emailUpdate.change-instructions": "A confirmation email will be sent to the entered email address with a unique link. Accessing that link will confirm your ownership of the email address and it will become active on your account. At any time, you are able to update your email on file from within your account page."
 }

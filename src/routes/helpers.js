@@ -15,9 +15,9 @@ function _handleArgs(middleware, middlewares, controller) {
 	}
 
 	middlewares = [
+		middleware.authenticateRequest,
 		middleware.maintenanceMode,
 		middleware.registrationComplete,
-		middleware.authenticateRequest,
 		middleware.pluginHooks,
 		...middlewares,
 	];
@@ -32,7 +32,6 @@ helpers.setupPageRoute = function (router, name, middleware, middlewares, contro
 	router.get(
 		name,
 		middleware.busyCheck,
-		middleware.applyCSRF,
 		middlewares,
 		middleware.buildHeader,
 		helpers.tryRoute(controller)

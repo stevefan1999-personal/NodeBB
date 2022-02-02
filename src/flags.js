@@ -64,8 +64,8 @@ Flags.init = async function () {
 			cid: function (sets, orSets, key) {
 				prepareSets(sets, orSets, 'flags:byCid:', key);
 			},
-			page: function () {	/* noop */ },
-			perPage: function () {	/* noop */ },
+			page: function () { /* noop */ },
+			perPage: function () { /* noop */ },
 			quick: function (sets, orSets, key, uid) {
 				switch (key) {
 					case 'mine':
@@ -93,9 +93,8 @@ Flags.init = async function () {
 };
 
 Flags.get = async function (flagId) {
-	const [base, history, notes, reports] = await Promise.all([
+	const [base, notes, reports] = await Promise.all([
 		db.getObject(`flag:${flagId}`),
-		Flags.getHistory(flagId),
 		Flags.getNotes(flagId),
 		Flags.getReports(flagId),
 	]);
@@ -109,9 +108,8 @@ Flags.get = async function (flagId) {
 		datetimeISO: utils.toISOString(base.datetime),
 		target_readable: `${base.type.charAt(0).toUpperCase() + base.type.slice(1)} ${base.targetId}`,
 		target: await Flags.getTarget(base.type, base.targetId, 0),
-		history: history,
-		notes: notes,
-		reports: reports,
+		notes,
+		reports,
 	};
 
 	const data = await plugins.hooks.fire('filter:flags.get', {
@@ -141,7 +139,7 @@ Flags.getFlagIdsWithFilters = async function ({ filters, uid, query }) {
 			winston.warn(`[flags/list] No flag filter type found: ${type}`);
 		}
 	}
-	sets = (sets.length || orSets.length) ? sets : ['flags:datetime'];	// No filter default
+	sets = (sets.length || orSets.length) ? sets : ['flags:datetime']; // No filter default
 
 	let flagIds = [];
 	if (sets.length === 1) {
@@ -244,7 +242,7 @@ Flags.sort = async function (flagIds, sort) {
 			break;
 		}
 
-		case 'upvotes':	// fall-through
+		case 'upvotes': // fall-through
 		case 'downvotes':
 		case 'replies': {
 			flagIds = await filterPosts(flagIds);
@@ -426,8 +424,8 @@ Flags.create = async function (type, id, uid, reason, timestamp) {
 		}),
 		Flags.addReport(flagId, type, id, uid, reason, timestamp),
 		db.sortedSetAdd('flags:datetime', timestamp, flagId), // by time, the default
-		db.sortedSetAdd(`flags:byType:${type}`, timestamp, flagId),	// by flag type
-		db.sortedSetIncrBy('flags:byTarget', 1, [type, id].join(':')),	// by flag target (score is count)
+		db.sortedSetAdd(`flags:byType:${type}`, timestamp, flagId), // by flag type
+		db.sortedSetIncrBy('flags:byTarget', 1, [type, id].join(':')), // by flag target (score is count)
 		analytics.increment('flags') // some fancy analytics
 	);
 
@@ -441,7 +439,7 @@ Flags.create = async function (type, id, uid, reason, timestamp) {
 
 	if (type === 'post') {
 		batched.push(
-			db.sortedSetAdd(`flags:byPid:${id}`, timestamp, flagId),	// by target pid
+			db.sortedSetAdd(`flags:byPid:${id}`, timestamp, flagId), // by target pid
 			posts.setPostField(id, 'flagId', flagId)
 		);
 
@@ -738,6 +736,9 @@ Flags.notify = async function (flagObj, uid) {
 	]);
 	let uids = admins.concat(globalMods);
 	let notifObj = null;
+
+	const { displayname } = flagObj.reports[flagObj.reports.length - 1].reporter;
+
 	if (flagObj.type === 'post') {
 		const [title, cid] = await Promise.all([
 			topics.getTitleByPid(flagObj.targetId),
@@ -749,7 +750,7 @@ Flags.notify = async function (flagObj, uid) {
 
 		notifObj = await notifications.create({
 			type: 'new-post-flag',
-			bodyShort: `[[notifications:user_flagged_post_in, ${flagObj.reports[flagObj.reports.length - 1].reporter.username}, ${titleEscaped}]]`,
+			bodyShort: `[[notifications:user_flagged_post_in, ${displayname}, ${titleEscaped}]]`,
 			bodyLong: await plugins.hooks.fire('filter:parse.raw', String(flagObj.description || '')),
 			pid: flagObj.targetId,
 			path: `/flags/${flagObj.flagId}`,
@@ -762,7 +763,7 @@ Flags.notify = async function (flagObj, uid) {
 	} else if (flagObj.type === 'user') {
 		notifObj = await notifications.create({
 			type: 'new-user-flag',
-			bodyShort: `[[notifications:user_flagged_user, ${flagObj.reports[flagObj.reports.length - 1].reporter.username}, ${flagObj.target.username}]]`,
+			bodyShort: `[[notifications:user_flagged_user, ${displayname}, ${flagObj.target.user.displayname}]]`,
 			bodyLong: await plugins.hooks.fire('filter:parse.raw', String(flagObj.description || '')),
 			path: `/flags/${flagObj.flagId}`,
 			nid: `flag:user:${flagObj.targetId}`,
@@ -794,7 +795,7 @@ async function mergeBanHistory(history, targetUid, uids) {
 			meta: [
 				{
 					key: '[[user:banned]]',
-					value: cur.reason,
+					value: validator.escape(String(cur.reason)),
 					labelClass: 'danger',
 				},
 				{

@@ -23,7 +23,7 @@ Write.reload = async (params) => {
 
 	router.use('/api/v3', (req, res, next) => {
 		// Require https if configured so
-		if (apiSettings.requireHttps === 'on') {
+		if (apiSettings.requireHttps === 'on' && req.protocol !== 'https') {
 			res.set('Upgrade', 'TLS/1.0, HTTP/1.1');
 			return helpers.formatApiResponse(426, res);
 		}
@@ -37,6 +37,7 @@ Write.reload = async (params) => {
 	router.use('/api/v3/categories', require('./categories')());
 	router.use('/api/v3/topics', require('./topics')());
 	router.use('/api/v3/posts', require('./posts')());
+	router.use('/api/v3/chats', require('./chats')());
 	router.use('/api/v3/flags', require('./flags')());
 	router.use('/api/v3/admin', require('./admin')());
 	router.use('/api/v3/files', require('./files')());

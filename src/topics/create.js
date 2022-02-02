@@ -60,6 +60,7 @@ module.exports = function (Topics) {
 				'topics:views', 'topics:posts', 'topics:votes',
 				`cid:${topicData.cid}:tids:votes`,
 				`cid:${topicData.cid}:tids:posts`,
+				`cid:${topicData.cid}:tids:views`,
 			], 0, topicData.tid),
 			user.addTopicIdToUser(topicData.uid, topicData.tid, timestamp),
 			db.incrObjectField(`category:${topicData.cid}`, 'topic_count'),
@@ -76,7 +77,9 @@ module.exports = function (Topics) {
 	};
 
 	Topics.post = async function (data) {
+		data = await plugins.hooks.fire('filter:topic.post', data);
 		const { uid } = data;
+
 		data.title = String(data.title).trim();
 		data.tags = data.tags || [];
 		if (data.content) {
@@ -89,8 +92,8 @@ module.exports = function (Topics) {
 
 		const [categoryExists, canCreate, canTag] = await Promise.all([
 			categories.exists(data.cid),
-			privileges.categories.can('topics:create', data.cid, data.uid),
-			privileges.categories.can('topics:tag', data.cid, data.uid),
+			privileges.categories.can('topics:create', data.cid, uid),
+			privileges.categories.can('topics:tag', data.cid, uid),
 		]);
 
 		if (!categoryExists) {
@@ -103,10 +106,9 @@ module.exports = function (Topics) {
 
 		await guestHandleValid(data);
 		if (!data.fromQueue) {
-			await user.isReadyToPost(data.uid, data.cid);
+			await user.isReadyToPost(uid, data.cid);
 		}
-		const filteredData = await plugins.hooks.fire('filter:topic.post', data);
-		data = filteredData;
+
 		const tid = await Topics.create(data);
 
 		let postData = data;
@@ -125,7 +127,7 @@ module.exports = function (Topics) {
 			throw new Error('[[error:no-topic]]');
 		}
 
-		if (settings.followTopicsOnCreate) {
+		if (uid > 0 && settings.followTopicsOnCreate) {
 			await Topics.follow(postData.tid, uid);
 		}
 		const topicData = topics[0];
@@ -152,6 +154,7 @@ module.exports = function (Topics) {
 	};
 
 	Topics.reply = async function (data) {
+		data = await plugins.hooks.fire('filter:topic.reply', data);
 		const { tid } = data;
 		const { uid } = data;
 
@@ -165,7 +168,6 @@ module.exports = function (Topics) {
 		if (!data.fromQueue) {
 			await user.isReadyToPost(uid, data.cid);
 		}
-		await plugins.hooks.fire('filter:topic.reply', data);
 		if (data.content) {
 			data.content = utils.rtrim(data.content);
 		}
@@ -181,7 +183,7 @@ module.exports = function (Topics) {
 		postData = await onNewPost(postData, data);
 
 		const settings = await user.getSettings(uid);
-		if (settings.followTopicsOnReply) {
+		if (uid > 0 && settings.followTopicsOnReply) {
 			await Topics.follow(postData.tid, uid);
 		}
 
@@ -190,9 +192,11 @@ module.exports = function (Topics) {
 		}
 
 		if (parseInt(uid, 10) || meta.config.allowGuestReplyNotifications) {
+			const { displayname } = postData.user;
+
 			Topics.notifyFollowers(postData, uid, {
 				type: 'new-reply',
-				bodyShort: translator.compile('notifications:user_posted_to', postData.user.username, postData.topic.title),
+				bodyShort: translator.compile('notifications:user_posted_to', displayname, postData.topic.title),
 				nid: `new_post:tid:${postData.topic.tid}:pid:${postData.pid}:uid:${uid}`,
 				mergeId: `notifications:user_posted_to|${postData.topic.tid}`,
 			});
@@ -216,6 +220,7 @@ module.exports = function (Topics) {
 			posts.getUserInfoForPosts([postData.uid], uid),
 			Topics.getTopicFields(tid, ['tid', 'uid', 'title', 'slug', 'cid', 'postcount', 'mainPid', 'scheduled']),
 			Topics.addParentPosts([postData]),
+			Topics.syncBacklinks(postData),
 			posts.parsePost(postData),
 		]);
 

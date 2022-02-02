@@ -94,10 +94,12 @@
     "digest_off": "Av",
     "digest_daily": "Daglig",
     "digest_weekly": "Ukentlig",
+    "digest_biweekly": "Bi-Weekly",
     "digest_monthly": "Månedlig",
     "has_no_follower": "Denne brukeren har ingen følgere :(",
     "follows_no_one": "Denne brukeren følger ingen :(",
     "has_no_posts": "Denne brukeren har ikke skrevet noe enda.",
+    "has_no_best_posts": "This user does not have any upvoted posts yet.",
     "has_no_topics": "Denne brukeren har ikke skrevet noen tråder enda.",
     "has_no_watched_topics": "Denne brukeren har ikke fulgt noen tråder enda.",
     "has_no_ignored_topics": "Denne brukeren har ikke ignorert noen emner ennå",
@@ -182,6 +184,7 @@
     "consent.export_posts": "Eksporter innlegg (.csv)",
     "consent.export-posts-success": "Eksporterer innlegg, du får en notifikasjon når eksporten er fullført.",
     "emailUpdate.intro": "Please enter your email address below. This forum uses your email address for scheduled digest and notifications, as well as for account recovery in the event of a lost password.",
-    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email, you will not be able to recover your account.",
+    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email you will not be able to recover your account or login with your email.",
+    "emailUpdate.required": "<strong>This field is required</strong>.",
     "emailUpdate.change-instructions": "A confirmation email will be sent to the entered email address with a unique link. Accessing that link will confirm your ownership of the email address and it will become active on your account. At any time, you are able to update your email on file from within your account page."
 }

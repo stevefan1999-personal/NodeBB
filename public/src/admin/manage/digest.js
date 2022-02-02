@@ -1,34 +1,34 @@
 'use strict';
 
 
-define('admin/manage/digest', function () {
-	var Digest = {};
+define('admin/manage/digest', ['bootbox', 'alerts'], function (bootbox, alerts) {
+	const Digest = {};
 
 	Digest.init = function () {
 		$('table').on('click', '[data-action]', function () {
-			var action = this.getAttribute('data-action');
-			var uid = this.getAttribute('data-uid');
+			const action = this.getAttribute('data-action');
+			const uid = this.getAttribute('data-uid');
 
 			if (action.startsWith('resend-')) {
-				var interval = action.slice(7);
+				const interval = action.slice(7);
 				bootbox.confirm('[[admin/manage/digest:resend-all-confirm]]', function (ok) {
 					if (ok) {
 						Digest.send(action, undefined, function (err) {
 							if (err) {
-								return app.alertError(err);
+								return alerts.error(err);
 							}
 
-							app.alertSuccess('[[admin/manage/digest:resent-' + interval + ']]');
+							alerts.success('[[admin/manage/digest:resent-' + interval + ']]');
 						});
 					}
 				});
 			} else {
 				Digest.send(action, uid, function (err) {
 					if (err) {
-						return app.alertError(err);
+						return alerts.error(err);
 					}
 
-					app.alertSuccess('[[admin/manage/digest:resent-single]]');
+					alerts.success('[[admin/manage/digest:resent-single]]');
 				});
 			}
 		});

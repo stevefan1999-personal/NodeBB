@@ -1,7 +1,9 @@
 'use strict';
 
-define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'benchpress', 'forum/account/header', 'accounts/delete', 'api'], function (FlagsList, components, translator, Benchpress, AccountHeader, AccountsDelete, api) {
-	var Detail = {};
+define('forum/flags/detail', [
+	'components', 'translator', 'benchpress', 'forum/account/header', 'accounts/delete', 'api', 'bootbox', 'alerts',
+], function (components, translator, Benchpress, AccountHeader, AccountsDelete, api, bootbox, alerts) {
+	const Detail = {};
 
 	Detail.init = function () {
 		// Update attributes
@@ -9,9 +11,9 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 		$('#assignee').val(ajaxify.data.assignee).removeAttr('disabled');
 
 		$('#content > div').on('click', '[data-action]', function () {
-			var action = this.getAttribute('data-action');
-			var uid = $(this).parents('[data-uid]').attr('data-uid');
-			var noteEl = document.getElementById('note');
+			const action = this.getAttribute('data-action');
+			const uid = $(this).parents('[data-uid]').attr('data-uid');
+			const noteEl = document.getElementById('note');
 
 			switch (action) {
 				case 'assign':
@@ -25,9 +27,9 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 					}, {});
 
 					api.put(`/flags/${ajaxify.data.flagId}`, data).then((history) => {
-						app.alertSuccess('[[flags:updated]]');
+						alerts.success('[[flags:updated]]');
 						Detail.reloadHistory(history);
-					}).catch(app.alertError);
+					}).catch(alerts.error);
 					break;
 				}
 
@@ -37,29 +39,31 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 						note: noteEl.value,
 						datetime: parseInt(noteEl.getAttribute('data-datetime'), 10),
 					}).then((payload) => {
-						app.alertSuccess('[[flags:note-added]]');
+						alerts.success('[[flags:note-added]]');
 						Detail.reloadNotes(payload.notes);
 						Detail.reloadHistory(payload.history);
 
 						noteEl.removeAttribute('data-datetime');
-					}).catch(app.alertError);
+					}).catch(alerts.error);
 					break;
 
-				case 'delete-note':
-					var datetime = parseInt(this.closest('[data-datetime]').getAttribute('data-datetime'), 10);
+				case 'delete-note': {
+					const datetime = parseInt(this.closest('[data-datetime]').getAttribute('data-datetime'), 10);
 					bootbox.confirm('[[flags:delete-note-confirm]]', function (ok) {
 						if (ok) {
 							api.delete(`/flags/${ajaxify.data.flagId}/notes/${datetime}`, {}).then((payload) => {
-								app.alertSuccess('[[flags:note-deleted]]');
+								alerts.success('[[flags:note-deleted]]');
 								Detail.reloadNotes(payload.notes);
 								Detail.reloadHistory(payload.history);
-							}).catch(app.alertError);
+							}).catch(alerts.error);
 						}
 					});
 					break;
-
+				}
 				case 'chat':
-					app.newChat(uid);
+					require(['chat'], function (chat) {
+						chat.newChat(uid);
+					});
 					break;
 
 				case 'ban':
@@ -90,15 +94,15 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 					postAction('restore', ajaxify.data.target.pid, ajaxify.data.target.tid);
 					break;
 
-				case 'prepare-edit':
-					var selectedNoteEl = this.closest('[data-index]');
-					var index = selectedNoteEl.getAttribute('data-index');
-					var textareaEl = document.getElementById('note');
+				case 'prepare-edit': {
+					const selectedNoteEl = this.closest('[data-index]');
+					const index = selectedNoteEl.getAttribute('data-index');
+					const textareaEl = document.getElementById('note');
 					textareaEl.value = ajaxify.data.notes[index].content;
 					textareaEl.setAttribute('data-datetime', ajaxify.data.notes[index].datetime);
 
-					var siblings = selectedNoteEl.parentElement.children;
-					for (var el in siblings) {
+					const siblings = selectedNoteEl.parentElement.children;
+					for (const el in siblings) {
 						if (siblings.hasOwnProperty(el)) {
 							siblings[el].classList.remove('editing');
 						}
@@ -106,6 +110,7 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 					selectedNoteEl.classList.add('editing');
 					textareaEl.focus();
 					break;
+				}
 			}
 		});
 	};
@@ -122,7 +127,7 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 					tid: tid,
 				}, function (err) {
 					if (err) {
-						app.alertError(err.message);
+						alerts.error(err);
 					}
 
 					ajaxify.refresh();
@@ -136,7 +141,7 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 		Benchpress.render('flags/detail', {
 			notes: notes,
 		}, 'notes').then(function (html) {
-			var wrapperEl = components.get('flag/notes');
+			const wrapperEl = components.get('flag/notes');
 			wrapperEl.empty();
 			wrapperEl.html(html);
 			wrapperEl.find('span.timeago').timeago();
@@ -148,7 +153,7 @@ define('forum/flags/detail', ['forum/flags/list', 'components', 'translator', 'b
 		app.parseAndTranslate('flags/detail', 'history', {
 			history: history,
 		}, function (html) {
-			var wrapperEl = components.get('flag/history');
+			const wrapperEl = components.get('flag/history');
 			wrapperEl.empty();
 			wrapperEl.html(html);
 			wrapperEl.find('span.timeago').timeago();

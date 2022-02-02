@@ -13,14 +13,8 @@ const notifications = require('../notifications');
 const plugins = require('../plugins');
 const utils = require('../utils');
 const batch = require('../batch');
-const apiHelpers = require('../api/helpers');
 
 const SocketHelpers = module.exports;
-
-SocketHelpers.setDefaultPostData = function (data, socket) {
-	websockets.warnDeprecated(socket, 'apiHelpers.setDefaultPostData');
-	apiHelpers.setDefaultPostData(socket, data);
-};
 
 SocketHelpers.notifyNew = async function (uid, type, result) {
 	let uids = await user.getUidsFromSet('users:online', 0, -1);
@@ -86,18 +80,20 @@ SocketHelpers.sendNotificationToPostOwner = async function (pid, fromuid, comman
 	if (!canRead || isIgnoring[0] || !postData.uid || fromuid === postData.uid) {
 		return;
 	}
-	const [username, topicTitle, postObj] = await Promise.all([
-		user.getUserField(fromuid, 'username'),
+	const [userData, topicTitle, postObj] = await Promise.all([
+		user.getUserFields(fromuid, ['username']),
 		topics.getTopicField(postData.tid, 'title'),
 		posts.parsePost(postData),
 	]);
+
+	const { displayname } = userData;
 
 	const title = utils.decodeHTMLEntities(topicTitle);
 	const titleEscaped = title.replace(/%/g, '&#37;').replace(/,/g, '&#44;');
 
 	const notifObj = await notifications.create({
 		type: command,
-		bodyShort: `[[${notification}, ${username}, ${titleEscaped}]]`,
+		bodyShort: `[[${notification}, ${displayname}, ${titleEscaped}]]`,
 		bodyLong: postObj.content,
 		pid: pid,
 		tid: postData.tid,
@@ -119,20 +115,23 @@ SocketHelpers.sendNotificationToTopicOwner = async function (tid, fromuid, comma
 
 	fromuid = parseInt(fromuid, 10);
 
-	const [username, topicData] = await Promise.all([
-		user.getUserField(fromuid, 'username'),
+	const [userData, topicData] = await Promise.all([
+		user.getUserFields(fromuid, ['username']),
 		topics.getTopicFields(tid, ['uid', 'slug', 'title']),
 	]);
 
 	if (fromuid === topicData.uid) {
 		return;
 	}
+
+	const { displayname } = userData;
+
 	const ownerUid = topicData.uid;
 	const title = utils.decodeHTMLEntities(topicData.title);
 	const titleEscaped = title.replace(/%/g, '&#37;').replace(/,/g, '&#44;');
 
 	const notifObj = await notifications.create({
-		bodyShort: `[[${notification}, ${username}, ${titleEscaped}]]`,
+		bodyShort: `[[${notification}, ${displayname}, ${titleEscaped}]]`,
 		path: `/topic/${topicData.slug}`,
 		nid: `${command}:tid:${tid}:uid:${fromuid}`,
 		from: fromuid,

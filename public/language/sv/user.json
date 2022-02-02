@@ -94,10 +94,12 @@
     "digest_off": "Avslagen",
     "digest_daily": "Dagligen",
     "digest_weekly": "Veckovis",
+    "digest_biweekly": "Bi-Weekly",
     "digest_monthly": "Månadsvis",
     "has_no_follower": "Denna användare har inga följare :(",
     "follows_no_one": "Denna användare följer ingen :(",
     "has_no_posts": "Användaren har inte skrivit några inlägg ännu.",
+    "has_no_best_posts": "This user does not have any upvoted posts yet.",
     "has_no_topics": "Användaren har inte postat några ämnen ännu.",
     "has_no_watched_topics": "Användaren har inte bevakat några ämnen ännu.",
     "has_no_ignored_topics": "Denna användare ignorerar inte några ämnen ännu.",
@@ -182,6 +184,7 @@
     "consent.export_posts": "Exportera poster (.csv)",
     "consent.export-posts-success": "Exporting posts, you will get a notification when it is complete.",
     "emailUpdate.intro": "Please enter your email address below. This forum uses your email address for scheduled digest and notifications, as well as for account recovery in the event of a lost password.",
-    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email, you will not be able to recover your account.",
+    "emailUpdate.optional": "<strong>This field is optional</strong>. You are not obligated to provide your email address, but without a validated email you will not be able to recover your account or login with your email.",
+    "emailUpdate.required": "<strong>This field is required</strong>.",
     "emailUpdate.change-instructions": "A confirmation email will be sent to the entered email address with a unique link. Accessing that link will confirm your ownership of the email address and it will become active on your account. At any time, you are able to update your email on file from within your account page."
 }

@@ -1,7 +1,7 @@
 'use strict';
 
-define('accounts/delete', ['api', 'bootbox'], function (api) {
-	var Delete = {};
+define('accounts/delete', ['api', 'bootbox', 'alerts'], function (api, bootbox, alerts) {
+	const Delete = {};
 
 	Delete.account = function (uid, callback) {
 		executeAction(
@@ -40,14 +40,12 @@ define('accounts/delete', ['api', 'bootbox'], function (api) {
 			}
 
 			api.del(`/users/${uid}${path}`, {}).then(() => {
-				app.alertSuccess(successText);
+				alerts.success(successText);
 
 				if (typeof callback === 'function') {
 					return callback();
 				}
-			}).catch(function (err) {
-				app.alertError(err);
-			});
+			}).catch(alerts.error);
 		});
 	}
 
