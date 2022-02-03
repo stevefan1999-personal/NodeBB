@@ -1,9 +1,4 @@
-.github
-.husky
-.tx
-.git*
-.mocharc.yml
-.eslint*
+.*
 commitlint.config.js
 docker-compose.yml
 nodebb.bat
