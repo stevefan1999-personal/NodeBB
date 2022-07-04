@@ -38,6 +38,7 @@
 	"delete-post": "Post löschen",
 	"purge-post": "Post bereiningen",
 	"restore-post": "Post wiederherstellen",
+	"delete": "Markierung löschen",
 
 	"user-view": "Profil ansehen",
 	"user-edit": "Profil bearbeiten",
@@ -46,8 +47,10 @@
 	"add-note": "Notiz hinzufügen",
 	"no-notes": "Keine geteilten Notizen",
 	"delete-note-confirm": "Bist du sicher, dass du diese Notiz löschen möchtest?",
+	"delete-flag-confirm": "Möchtest Du diese Markierung wirklich löschen?",
 	"note-added": "Notiz hinzugefügt",
 	"note-deleted": "Notiz gelöscht",
+	"flag-deleted": "Markierung gelöscht",
 
 	"history": "Konto &amp; Markierungsverlauf",
 	"no-history": "Kein Meldungsverlauf",
@@ -81,5 +84,6 @@
 	"bulk-actions": "Massenaktionen",
 	"bulk-resolve": "Meldungen bereiningen",
 	"bulk-success": "%1 Meldungen aktualisiert",
-	"flagged-timeago-readable": "Markiert <span class=\"timeago\" title=\"%1\"></span>(%2)"
+	"flagged-timeago-readable": "Markiert <span class=\"timeago\" title=\"%1\"></span>(%2)",
+  	"auto-flagged": "[Automatisch markiert] %1 Abwertungen erhalten."
 }

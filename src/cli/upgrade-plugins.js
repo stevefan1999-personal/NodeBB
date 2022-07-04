@@ -6,16 +6,13 @@ const cproc = require('child_process');
 const semver = require('semver');
 const fs = require('fs');
 const path = require('path');
-const nconf = require('nconf');
 const chalk = require('chalk');
 
 const { paths, pluginNamePattern } = require('../constants');
+const pkgInstall = require('./package-install');
 
-const packageManager = nconf.get('package_manager');
-
-const supportedPackageManagerList = require('./package-install').supportedPackageManager; // load config from src/cli/package-install.js
-
-let packageManagerExecutable = supportedPackageManagerList.indexOf(packageManager) >= 0 ? packageManager : 'npm';
+const packageManager = pkgInstall.getPackageManager();
+let packageManagerExecutable = packageManager;
 const packageManagerInstallArgs = packageManager === 'yarn' ? ['add'] : ['install', '--save'];
 
 if (process.platform === 'win32') {
@@ -128,7 +125,7 @@ async function upgradePlugins() {
 		if (found && found.length) {
 			process.stdout.write(`\n\nA total of ${chalk.bold(String(found.length))} package(s) can be upgraded:\n\n`);
 			found.forEach((suggestObj) => {
-				process.stdout.write(`${chalk.yellow('  * ') + suggestObj.name} (${chalk.yellow(suggestObj.current)}' -> '${chalk.green(suggestObj.suggested)}')\n'`);
+				process.stdout.write(`${chalk.yellow('  * ') + suggestObj.name} ('${chalk.yellow(suggestObj.current)}' -> '${chalk.green(suggestObj.suggested)}')\n'`);
 			});
 		} else {
 			console.log(chalk.green('\nAll packages up-to-date!'));

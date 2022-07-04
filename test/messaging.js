@@ -15,7 +15,7 @@ const Groups = require('../src/groups');
 const Messaging = require('../src/messaging');
 const helpers = require('./helpers');
 const socketModules = require('../src/socket.io/modules');
-const utils = require('../public/src/utils');
+const utils = require('../src/utils');
 const translator = require('../src/translator');
 
 describe('Messaging Library', () => {
@@ -702,6 +702,7 @@ describe('Messaging Library', () => {
 					assert.ifError(err);
 					messages.forEach((msg) => {
 						assert(!msg.deleted || msg.content === '[[modules:chat.message-deleted]]', msg.content);
+						assert(!msg.deleted || msg.cleanedContent, '[[modules:chat.message-deleted]]', msg.content);
 					});
 					done();
 				}

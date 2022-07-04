@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+
 const fs = require('fs');
 const cproc = require('child_process');
 
@@ -18,16 +19,21 @@ function sortDependencies(dependencies) {
 }
 
 pkgInstall.updatePackageFile = () => {
-	let oldPackageContents = {};
+	let oldPackageContents;
 
 	try {
 		oldPackageContents = JSON.parse(fs.readFileSync(paths.currentPackage, 'utf8'));
 	} catch (e) {
 		if (e.code !== 'ENOENT') {
 			throw e;
+		} else {
+			// No local package.json, copy from install/package.json
+			fs.copyFileSync(paths.installPackage, paths.currentPackage);
+			return;
 		}
 	}
 
+	const _ = require('lodash');
 	const defaultPackageContents = JSON.parse(fs.readFileSync(paths.installPackage, 'utf8'));
 
 	let dependencies = {};
@@ -37,12 +43,13 @@ pkgInstall.updatePackageFile = () => {
 		}
 	});
 
+	const { devDependencies } = defaultPackageContents;
+
 	// Sort dependencies alphabetically
 	dependencies = sortDependencies({ ...dependencies, ...defaultPackageContents.dependencies });
 
-	const packageContents = { ...oldPackageContents, ...defaultPackageContents, dependencies: dependencies };
-
-	fs.writeFileSync(paths.currentPackage, JSON.stringify(packageContents, null, 2));
+	const packageContents = { ..._.merge(oldPackageContents, defaultPackageContents), dependencies, devDependencies };
+	fs.writeFileSync(paths.currentPackage, JSON.stringify(packageContents, null, 4));
 };
 
 pkgInstall.supportedPackageManager = [
@@ -53,15 +60,44 @@ pkgInstall.supportedPackageManager = [
 ];
 
 pkgInstall.getPackageManager = () => {
-	// Use this method if you can't reliably require('nconf') directly
 	try {
-		// Quick & dirty nconf setup
 		fs.accessSync(path.join(paths.nodeModules, 'nconf/package.json'), fs.constants.R_OK);
 		const nconf = require('nconf');
-		const configFile = path.resolve(__dirname, '../../', nconf.any(['config', 'CONFIG']) || 'config.json');
-		nconf.env().file({ // not sure why adding .argv() causes the process to terminate
-			file: configFile,
-		});
+		if (!Object.keys(nconf.stores).length) {
+			// Quick & dirty nconf setup for when you cannot rely on nconf having been required already
+			const configFile = path.resolve(__dirname, '../../', nconf.any(['config', 'CONFIG']) || 'config.json');
+			nconf.env().file({ // not sure why adding .argv() causes the process to terminate
+				file: configFile,
+			});
+		}
+
+		if (nconf.get('package_manager') && !pkgInstall.supportedPackageManager.includes(nconf.get('package_manager'))) {
+			nconf.clear('package_manager');
+		}
+
+		if (!nconf.get('package_manager')) {
+			// Best guess based on lockfile detection
+			try {
+				// use npm if lockfile present
+				fs.accessSync(path.resolve(__dirname, '../../package-lock.json'), fs.constants.R_OK);
+			} catch (e) {
+				nconf.set('package_manager', [
+					// no cnpm detection as it uses same lockfile as npm
+					'yarn.lock', 'pnpm-lock.yaml',
+				].reduce((result, cur) => {
+					if (result) {
+						return result;
+					}
+
+					try {
+						fs.accessSync(path.resolve(__dirname, `../../${cur}`), fs.constants.R_OK);
+						return cur.slice(0, 4);
+					} catch (e) {
+						return result;
+					}
+				}, undefined));
+			}
+		}
 
 		return nconf.get('package_manager') || 'npm';
 	} catch (e) {
@@ -138,5 +174,5 @@ pkgInstall.preserveExtraneousPlugins = () => {
 	// Add those packages to package.json
 	packageContents.dependencies = sortDependencies({ ...packageContents.dependencies, ...extraneous });
 
-	fs.writeFileSync(paths.currentPackage, JSON.stringify(packageContents, null, 2));
+	fs.writeFileSync(paths.currentPackage, JSON.stringify(packageContents, null, 4));
 };

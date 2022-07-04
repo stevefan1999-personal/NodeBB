@@ -4,7 +4,6 @@
 const _ = require('lodash');
 const validator = require('validator');
 const winston = require('winston');
-const punycode = require('punycode');
 
 const utils = require('../utils');
 const slugify = require('../slugify');
@@ -46,28 +45,14 @@ module.exports = function (User) {
 
 			data[field] = data[field].trim();
 
-			switch (field) {
-				case 'email': {
-					return await updateEmail(updateUid, data.email);
-				}
-
-				case 'username': {
-					return await updateUsername(updateUid, data.username);
-				}
-
-				case 'fullname': {
-					return await updateFullname(updateUid, data.fullname);
-				}
-
-				case 'website': {
-					updateData[field] = punycode.toASCII(data[field]);
-					break;
-				}
-
-				default: {
-					updateData[field] = data[field];
-				}
+			if (field === 'email') {
+				return await updateEmail(updateUid, data.email);
+			} else if (field === 'username') {
+				return await updateUsername(updateUid, data.username);
+			} else if (field === 'fullname') {
+				return await updateFullname(updateUid, data.fullname);
 			}
+			updateData[field] = data[field];
 		}));
 
 		if (Object.keys(updateData).length) {
@@ -180,7 +165,8 @@ module.exports = function (User) {
 		if (!data.signature) {
 			return;
 		}
-		if (data.signature !== undefined && data.signature.length > meta.config.maximumSignatureLength) {
+		const signature = data.signature.replace(/\r\n/g, '\n');
+		if (signature.length > meta.config.maximumSignatureLength) {
 			throw new Error(`[[error:signature-too-long, ${meta.config.maximumSignatureLength}]]`);
 		}
 		await User.checkMinReputation(callerUid, data.uid, 'min:rep:signature');
@@ -241,7 +227,7 @@ module.exports = function (User) {
 		}
 		const reputation = await User.getUserField(uid, 'reputation');
 		if (reputation < meta.config[setting]) {
-			throw new Error(`[[error:not-enough-reputation-${setting.replace(/:/g, '-')}]]`);
+			throw new Error(`[[error:not-enough-reputation-${setting.replace(/:/g, '-')}, ${meta.config[setting]}]]`);
 		}
 	};
 

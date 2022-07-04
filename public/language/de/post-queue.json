@@ -17,5 +17,15 @@
 	"reject": "Ablehnen",
 	"remove": "Entfernen",
 	"notify": "Benachrichtigen",
-	"notify-user": "Benutzer benachrichtigen"
+	"notify-user": "Benutzer benachrichtigen",
+	"confirm-reject": "Möchtest Du diesen Beitrag ablehnen?",
+	"bulk-actions": "Massenaktionen",
+	"accept-all": "Alle akzeptieren",
+	"accept-selected": "Ausgewählte akzeptieren",
+	"reject-all": "Alle ablehnen",
+	"reject-all-confirm": "Möchtest Du alle Beiträge ablehnen?",
+	"reject-selected": "Ausgewählte ablehnen",
+	"reject-selected-confirm": "Möchtest Du %1 ausgewählte Beiträge ablehnen?",
+	"bulk-accept-success": "%1 Beiträge akzeptiert",
+	"bulk-reject-success": "%1 Beiträge abgelehnt"
 }

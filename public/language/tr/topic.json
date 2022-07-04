@@ -47,7 +47,7 @@
     "restored-by": "Tekrar Yüklendi",
     "moved-from-by": "%1 bölümünden taşındı",
     "queued-by": "İleti onay için sıraya alındı &rarr;",
-    "backlink": "Bu başlıktan bahsedildi. Kullanıcı: ",
+    "backlink": "Bu başlıktan bahsedildi.",
     "forked-by": "Başlık ayrıldı",
     "bookmark_instructions": "Bu konuda en son kaldığın yere dönmek için tıkla.",
     "flag-post": "Bu iletiyi şikayet et",
@@ -113,6 +113,7 @@
     "bookmark": "Yer imlerine ekle",
     "bookmarks": "Yer imleri",
     "bookmarks.has_no_bookmarks": "Henüz hiçbir iletiyi yer imlerine eklemediniz!",
+    "copy-permalink": "Bağlantıyı Kopyala",
     "loading_more_posts": "Daha fazla ileti ",
     "move_topic": "Başlığı Taşı",
     "move_topics": "Başlıkları Taşı",
@@ -181,5 +182,7 @@
     "timeago_earlier": "%1 önce",
     "first-post": "İlk ileti",
     "last-post": "Son ileti",
+    "go-to-my-next-post": "Diğer iletime git",
+    "no-more-next-post": "Bu başlıkta başka bir iletiniz bulunmamaktadır.",
     "post-quick-reply": "Hızlı yanıt gönder"
 }

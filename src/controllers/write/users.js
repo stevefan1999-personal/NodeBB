@@ -111,6 +111,16 @@ Users.unban = async (req, res) => {
 	helpers.formatApiResponse(200, res);
 };
 
+Users.mute = async (req, res) => {
+	await api.users.mute(req, { ...req.body, uid: req.params.uid });
+	helpers.formatApiResponse(200, res);
+};
+
+Users.unmute = async (req, res) => {
+	await api.users.unmute(req, { ...req.body, uid: req.params.uid });
+	helpers.formatApiResponse(200, res);
+};
+
 Users.generateToken = async (req, res) => {
 	await hasAdminPrivilege(req.uid, 'settings');
 	if (parseInt(req.params.uid, 10) !== parseInt(req.user.uid, 10)) {
@@ -265,16 +275,21 @@ Users.getEmail = async (req, res) => {
 };
 
 Users.confirmEmail = async (req, res) => {
-	const [exists, canManage] = await Promise.all([
-		db.isSortedSetMember('email:uid', req.params.email.toLowerCase()),
+	const [pending, current, canManage] = await Promise.all([
+		user.email.isValidationPending(req.params.uid, req.params.email),
+		user.getUserField(req.params.uid, 'email'),
 		privileges.admin.can('admin:users', req.uid),
 	]);
 
 	if (!canManage) {
-		helpers.notAllowed(req, res);
+		return helpers.notAllowed(req, res);
 	}
 
-	if (exists) {
+	if (pending) { // has active confirmation request
+		const code = await db.get(`confirm:byUid:${req.params.uid}`);
+		await user.email.confirmByCode(code, req.session.id);
+		helpers.formatApiResponse(200, res);
+	} else if (current && current === req.params.email) { // email in user hash (i.e. email passed into user.create)
 		await user.email.confirmByUid(req.params.uid);
 		helpers.formatApiResponse(200, res);
 	} else {
