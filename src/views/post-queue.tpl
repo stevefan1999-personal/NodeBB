@@ -1,3 +1,17 @@
+{{{ if isAdmin }}}
+{{{ if !enabled }}}
+<div class="alert alert-info">
+	<p>[[post-queue:enabling-help, {config.relative_path}/admin/settings/post#post-queue]]</p>
+</div>
+{{{ end }}}
+{{{ else }}}
+<div>
+	<p class="lead">[[post-queue:public-intro]]</p>
+	<p>[[post-queue:public-description]]</p>
+	<hr />
+</div>
+{{{ end }}}
+
 {{{ if (!singlePost && posts.length) }}}
 <div class="btn-toolbar justify-content-end">
 	<div class="me-2">
@@ -7,16 +21,16 @@
 		<button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" autocomplete="off" aria-haspopup="true" aria-expanded="false">
 			<i class="fa fa-clone"></i> [[post-queue:bulk-actions]] <span class="caret"></span>
 		</button>
-		<ul class="dropdown-menu dropdown-menu-end">
+		<ul class="dropdown-menu dropdown-menu-end" role="menu">
 			{{{ if canAccept }}}
-			<li><a class="dropdown-item" href="#" data-action="accept-all">[[post-queue:accept-all]]</a></li>
-			<li><a class="dropdown-item" href="#" data-action="accept-selected">[[post-queue:accept-selected]]</a></li>
+			<li><a class="dropdown-item" href="#" data-action="accept-all" role="menuitem">[[post-queue:accept-all]]</a></li>
+			<li><a class="dropdown-item" href="#" data-action="accept-selected" role="menuitem">[[post-queue:accept-selected]]</a></li>
 			<li class="dropdown-divider"></li>
-			<li><a class="dropdown-item" href="#" data-action="reject-all">[[post-queue:reject-all]]</a></li>
-			<li><a class="dropdown-item" href="#" data-action="reject-selected">[[post-queue:reject-selected]]</a></li>
+			<li><a class="dropdown-item" href="#" data-action="reject-all" role="menuitem">[[post-queue:reject-all]]</a></li>
+			<li><a class="dropdown-item" href="#" data-action="reject-selected" role="menuitem">[[post-queue:reject-selected]]</a></li>
 			{{{ else }}}
 			<li><a class="dropdown-item" href="#" data-action="reject-all">[[post-queue:remove-all]]</a></li>
-			<li><a class="dropdown-item" href="#" data-action="reject-selected">[[post-queue:remove-selected]]</a></li>
+			<li><a class="dropdown-item" href="#" data-action="reject-selected" role="menuitem">[[post-queue:remove-selected]]</a></li>
 			{{{ end }}}
 		</ul>
 	</div>
@@ -28,18 +42,24 @@
 <div class="row">
 	<div class="col-12">
 		<div class="post-queue preventSlideout posts-list">
-			{{{ if (!posts.length && isAdmin) }}}
-			{{{ if !singlePost }}}
-			<div class="alert alert-info">
-				<p>[[post-queue:no-queued-posts]]</p>
-				{{{ if !enabled }}}<p>[[post-queue:enabling-help, {config.relative_path}/admin/settings/post#post-queue]]</p>{{{ end }}}
-			</div>
-			{{{ else }}}
-			<div class="alert alert-info d-flex align-items-center">
-				<p class="mb-0 me-auto">[[post-queue:no-single-post]]</p>
-				<a class="btn btn-sm btn-primary" href=".">[[post-queue:back-to-list]]</a>
-			</div>
-			{{{ end }}}
+			{{{ if !posts.length }}}
+				{{{ if !singlePost }}}
+				<div class="mx-auto">
+					<div class="d-flex flex-column gap-3 justify-content-center text-center">
+						<div class="mx-auto p-4 bg-light border rounded">
+							<i class="text-secondary fa fa-fw fa-4x fa-seedling"></i>
+						</div>
+						[[post-queue:no-queued-posts]]
+					</div>
+				</div>
+				{{{ else }}}
+				<div class="alert alert-info d-flex align-items-md-center d-flex flex-column flex-md-row">
+					<p class="mb-md-0">[[post-queue:no-single-post]]</p>
+					<div class="d-grid ms-md-auto">
+						<a class="btn btn-sm btn-primary flex-shrink text-nowrap" href=".">[[post-queue:back-to-list]]</a>
+					</div>
+				</div>
+				{{{ end }}}
 			{{{ end }}}
 
 			{{{ each posts }}}

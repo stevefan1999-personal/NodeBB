@@ -31,6 +31,7 @@ Notifications.baseTypes = [
 	'notificationType_upvote',
 	'notificationType_new-topic',
 	'notificationType_new-topic-with-tag',
+	'notificationType_new-topic-in-category',
 	'notificationType_new-reply',
 	'notificationType_post-edit',
 	'notificationType_follow',
@@ -196,9 +197,13 @@ async function pushToUids(uids, notification) {
 		await db.sortedSetsRemoveRangeByScore(unreadKeys.concat(readKeys), '-inf', cutoff);
 		const websockets = require('./socket.io');
 		if (websockets.server) {
-			uids.forEach((uid) => {
+			await Promise.all(uids.map(async (uid) => {
+				await plugins.hooks.fire('filter:sockets.sendNewNoticationToUid', {
+					uid,
+					notification,
+				});
 				websockets.in(`uid_${uid}`).emit('event:new_notification', notification);
-			});
+			}));
 		}
 	}
 
@@ -222,7 +227,10 @@ async function pushToUids(uids, notification) {
 
 	// Remove uid from recipients list if they have blocked the user triggering the notification
 	uids = await User.blocks.filterUids(notification.from, uids);
-	const data = await plugins.hooks.fire('filter:notification.push', { notification: notification, uids: uids });
+	const data = await plugins.hooks.fire('filter:notification.push', {
+		notification,
+		uids,
+	});
 	if (!data || !data.notification || !data.uids || !data.uids.length) {
 		return;
 	}

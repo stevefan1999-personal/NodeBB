@@ -79,7 +79,14 @@
 	"follow-replied-topics": "Minden témakör követése, amire válaszoltál",
 	"default-notification-settings": "Alapértelmezett értesítési beállítások",
 	"categoryWatchState": "Alapértelmezett kategóriafigyelés",
-	"categoryWatchState.watching": "Figyelés",
+	"categoryWatchState.tracking": "Követés",
 	"categoryWatchState.notwatching": "Nem megfigyelt",
-	"categoryWatchState.ignoring": "Mellőzés"
+	"categoryWatchState.ignoring": "Mellőzés",
+	"restrictions-new": "Új felhasználók korlátozása",
+	"restrictions.rep-threshold": "Szükséges hírnév szint ezen korlátozások feloldásához",
+	"restrictions.seconds-between-new": "Hozzászólások közötti kötelező szünet új felhasználóknak (másodpercben)",
+	"restrictions.seconds-before-new": "Szükséges eltelt idő, mielőtt egy új felhasználó hozzászólást írhat (másodpercben)",
+	"restrictions.seconds-edit-after-new": "Hány másodpercig maradjanak a hozzászólások szerkeszthetőek az új felhasználóknak (0: nincs korlátozás)",
+	"restrictions.milliseconds-between-messages": "Csevegési üzenetek közötti idő új felhasználóknak ezredmásodpercben",
+	"restrictions.groups-exempt-from-new-user-restrictions": "Válaszd ki azokat a csoportokat, amelyek mentesülnek az új felhasználói korlátozások alól."
 }

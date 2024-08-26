@@ -191,8 +191,10 @@ module.exports = function (Groups) {
 		await updateConfig(oldName, newName);
 		await updateChatRooms(oldName, newName);
 		await db.setObject(`group:${oldName}`, { name: newName, slug: slugify(newName) });
-		await db.deleteObjectField('groupslug:groupname', group.slug);
-		await db.setObjectField('groupslug:groupname', slugify(newName), newName);
+		if (!Groups.isPrivilegeGroup(oldName) && !Groups.isPrivilegeGroup(newName)) {
+			await db.deleteObjectField('groupslug:groupname', group.slug);
+			await db.setObjectField('groupslug:groupname', slugify(newName), newName);
+		}
 
 		const allGroups = await db.getSortedSetRange('groups:createtime', 0, -1);
 		const keys = allGroups.map(group => `group:${group}:members`);
@@ -274,17 +276,19 @@ module.exports = function (Groups) {
 	}
 
 	async function updateConfig(oldName, newName) {
-		if (meta.config.groupsExemptFromPostQueue.includes(oldName)) {
-			meta.config.groupsExemptFromPostQueue.splice(
-				meta.config.groupsExemptFromPostQueue.indexOf(oldName), 1, newName
-			);
-			await meta.configs.set('groupsExemptFromPostQueue', meta.config.groupsExemptFromPostQueue);
-		}
-		if (meta.config.groupsExemptFromMaintenanceMode.includes(oldName)) {
-			meta.config.groupsExemptFromMaintenanceMode.splice(
-				meta.config.groupsExemptFromMaintenanceMode.indexOf(oldName), 1, newName
-			);
-			await meta.configs.set('groupsExemptFromMaintenanceMode', meta.config.groupsExemptFromMaintenanceMode);
+		const configKeys = [
+			'groupsExemptFromPostQueue',
+			'groupsExemptFromNewUserRestrictions',
+			'groupsExemptFromMaintenanceMode',
+		];
+
+		for (const key of configKeys) {
+			if (meta.config[key] && meta.config[key].includes(oldName)) {
+				meta.config[key].splice(
+					meta.config[key].indexOf(oldName), 1, newName
+				);
+				await meta.configs.set(key, meta.config[key]);
+			}
 		}
 	}
 

@@ -69,9 +69,19 @@ define('forum/chats', [
 		}
 
 		Chats.initialised = true;
-		const changeContentEl = $('[component="chat/message/content"]');
-		messages.wrapImagesInLinks(changeContentEl);
-		messages.scrollToBottomAfterImageLoad(changeContentEl);
+		const chatContentEl = $('[component="chat/message/content"]');
+		messages.wrapImagesInLinks(chatContentEl);
+		if (ajaxify.data.scrollToIndex) {
+			messages.toggleScrollUpAlert(chatContentEl);
+			const scrollToEl = chatContentEl.find(`[data-index="${ajaxify.data.scrollToIndex - 1}"]`);
+			if (scrollToEl.length) {
+				chatContentEl.scrollTop(
+					chatContentEl.scrollTop() - chatContentEl.offset().top + scrollToEl.offset().top
+				);
+			}
+		} else {
+			messages.scrollToBottomAfterImageLoad(chatContentEl);
+		}
 		create.init();
 
 		hooks.fire('action:chat.loaded', $('.chats-full'));
@@ -90,12 +100,13 @@ define('forum/chats', [
 		Chats.addLeaveHandler(roomId, chatControls.find('[data-action="leave"]'));
 		Chats.addDeleteHandler(roomId, chatControls.find('[data-action="delete"]'));
 		Chats.addScrollHandler(roomId, ajaxify.data.uid, chatMessageContent);
-		Chats.addScrollBottomHandler(chatMessageContent);
+		Chats.addScrollBottomHandler(roomId, chatMessageContent);
 		Chats.addParentHandler(mainWrapper);
 		Chats.addCharactersLeftHandler(mainWrapper);
 		Chats.addTextareaResizeHandler(mainWrapper);
 		Chats.addTypingHandler(mainWrapper, roomId);
 		Chats.addIPHandler(mainWrapper);
+		Chats.addCopyTextLinkHandler(mainWrapper);
 		Chats.createAutoComplete(roomId, $('[component="chat/input"]'));
 		Chats.addUploadHandler({
 			dragDropAreaEl: $('.chats-full'),
@@ -130,7 +141,7 @@ define('forum/chats', [
 							data.roomIds.push($(el).attr('data-roomid'));
 							data.scores.push(idx);
 						});
-						await socket.emit('modules.chats.sortPublicRooms', data);
+						await api.put('/chats/sort', data);
 					},
 				});
 			});
@@ -157,7 +168,7 @@ define('forum/chats', [
 		});
 
 		containerEl.tooltip({
-			selector: '[component="chat/message/controls"] button',
+			selector: '[component="chat/message/controls"] > .btn-group > button',
 			placement: 'top',
 			container: '#content',
 			animation: false,
@@ -173,8 +184,7 @@ define('forum/chats', [
 			const $this = $(this);
 			$this.find('i.fa-check').removeClass('hidden');
 			notifSettingEl.find('[component="chat/notification/setting/icon"]').attr('class', `fa ${$this.attr('data-icon')}`);
-			await socket.emit('modules.chats.setNotificationSetting', {
-				roomId: roomId,
+			await api.put(`/chats/${roomId}/watch`, {
 				value: $this.attr('data-value'),
 			});
 		});
@@ -215,18 +225,51 @@ define('forum/chats', [
 
 	Chats.addIPHandler = function (container) {
 		container.off('click', '.chat-ip-button')
-			.on('click', '.chat-ip-button', async function () {
+			.on('click', '.chat-ip-button', async function (ev) {
+				ev.stopPropagation();
 				const ipEl = $(this);
+				const ipCopyText = ipEl.find('.copy .copy-ip-text');
 				let ip = ipEl.attr('data-ip');
 				if (ip) {
 					navigator.clipboard.writeText(ip);
-					ipEl.translateText('[[global:copied]]');
-					setTimeout(() => ipEl.text(ip), 2000);
+					ipCopyText.translateText('[[global:copied]]');
+					setTimeout(() => ipCopyText.text(ip), 2000);
 					return;
 				}
 				const mid = ipEl.parents('[data-mid]').attr('data-mid');
-				ip = await socket.emit('modules.chats.getIP', mid);
-				ipEl.text(ip).attr('data-ip', ip);
+				({ ip } = await api.get(`/chats/${ajaxify.data.roomId}/messages/${mid}/ip`));
+				ipEl.attr('data-ip', ip);
+				ipEl.find('.show').addClass('hidden');
+				ipEl.find('.copy').removeClass('hidden');
+				ipCopyText.text(ip);
+			});
+	};
+
+	Chats.addCopyTextLinkHandler = function (container) {
+		function doCopy(copyEl, text) {
+			navigator.clipboard.writeText(text);
+			copyEl.find('i').addClass('fa-check').removeClass('fa-link');
+			setTimeout(() => copyEl.find('i').removeClass('fa-check').addClass('fa-link'), 2000);
+		}
+
+		container.off('click', '[data-action="copy-link"]')
+			.on('click', '[data-action="copy-link"]', function (ev) {
+				ev.stopPropagation();
+				const copyEl = $(this);
+				const mid = copyEl.attr('data-mid');
+				if (mid) {
+					doCopy(copyEl, `${window.location.origin}/message/${mid}`);
+				}
+			});
+
+		container.off('click', '[data-action="copy-text"]')
+			.on('click', '[data-action="copy-text"]', function (ev) {
+				ev.stopPropagation();
+				const copyEl = $(this);
+				const messageEl = copyEl.parents('[data-mid]');
+				if (messageEl.length) {
+					doCopy(copyEl, messageEl.find('[component="chat/message/body"]').text().trim());
+				}
 			});
 	};
 
@@ -252,49 +295,82 @@ define('forum/chats', [
 
 	Chats.addScrollHandler = function (roomId, uid, el) {
 		let loading = false;
+		let previousScrollTop = el.scrollTop();
+		let currentScrollTop = previousScrollTop;
 		el.off('scroll').on('scroll', utils.debounce(function () {
+			if (parseInt(el.attr('data-ignore-next-scroll'), 10) === 1) {
+				el.removeAttr('data-ignore-next-scroll');
+				previousScrollTop = el.scrollTop();
+				return;
+			}
 			messages.toggleScrollUpAlert(el);
 			if (loading) {
 				return;
 			}
+			currentScrollTop = el.scrollTop();
 
-			const top = (el[0].scrollHeight - el.height()) * 0.1;
-			if (el.scrollTop() >= top) {
+			const direction = currentScrollTop > previousScrollTop ? 1 : -1;
+			previousScrollTop = currentScrollTop;
+			const scrollPercent = 100 * (currentScrollTop / (el[0].scrollHeight - el.height()));
+			const top = 15;
+			const bottom = 85;
+
+			if (direction === 1 && !ajaxify.data.scrollToIndex) {
+				// dont trigger infinitescroll if there is no /index in url
 				return;
 			}
-			loading = true;
-			const start = parseInt(el.children('[data-mid]').length, 10);
-			api.get(`/chats/${roomId}/messages`, { uid, start }).then((data) => {
-				data = data.messages;
 
-				if (!data) {
-					loading = false;
-					return;
-				}
-				data = data.filter(function (chatMsg) {
-					return !$('[component="chat/message"][data-mid="' + chatMsg.messageId + '"]').length;
-				});
-				if (!data.length) {
-					loading = false;
-					return;
-				}
-				messages.parseMessage(data, function (html) {
-					const currentScrollTop = el.scrollTop();
-					const previousHeight = el[0].scrollHeight;
-					el.prepend(html);
-					messages.onMessagesAddedToDom(html);
-					el.scrollTop((el[0].scrollHeight - previousHeight) + currentScrollTop);
-					loading = false;
-				});
-			}).catch(alerts.error);
+			if ((scrollPercent < top && direction === -1) || (scrollPercent > bottom && direction === 1)) {
+				loading = true;
+
+				const msgEls = el.children('[data-mid]').not('.new');
+				const afterEl = direction > 0 ? msgEls.last() : msgEls.first();
+				const start = parseInt(afterEl.attr('data-index'), 10) || 0;
+
+				api.get(`/chats/${roomId}/messages`, { uid, start, direction }).then((data) => {
+					let messageData = data.messages;
+					if (!messageData) {
+						loading = false;
+						return;
+					}
+					messageData = messageData.filter(function (chatMsg) {
+						const msgOnDom = el.find('[component="chat/message"][data-mid="' + chatMsg.messageId + '"]');
+						msgOnDom.removeClass('new');
+						return !msgOnDom.length;
+					});
+					if (!messageData.length) {
+						loading = false;
+						return;
+					}
+					messages.parseMessage(messageData, function (html) {
+						el.attr('data-ignore-next-scroll', 1);
+						if (direction > 0) {
+							html.insertAfter(afterEl);
+							messages.onMessagesAddedToDom(html);
+						} else {
+							const currentScrollTop = el.scrollTop();
+							const previousHeight = el[0].scrollHeight;
+							el.prepend(html);
+							messages.onMessagesAddedToDom(html);
+							el.scrollTop((el[0].scrollHeight - previousHeight) + currentScrollTop);
+						}
+
+						loading = false;
+					});
+				}).catch(alerts.error);
+			}
 		}, 100));
 	};
 
-	Chats.addScrollBottomHandler = function (chatContent) {
+	Chats.addScrollBottomHandler = function (roomId, chatContent) {
 		chatContent.parents('[component="chat/message/window"]')
 			.find('[component="chat/messages/scroll-up-alert"]')
 			.off('click').on('click', function () {
-				messages.scrollToBottom(chatContent);
+				if (ajaxify.data.scrollToIndex && parseInt(ajaxify.data.roomId, 10) === parseInt(roomId, 10)) {
+					Chats.switchChat(roomId);
+				} else {
+					messages.scrollToBottom(chatContent);
+				}
 			});
 	};
 
@@ -322,11 +398,7 @@ define('forum/chats', [
 	Chats.addTypingHandler = function (parent, roomId) {
 		const textarea = parent.find('[component="chat/input"]');
 		function emitTyping(typing) {
-			socket.emit('modules.chats.typing', {
-				roomId: roomId,
-				typing: typing,
-				username: app.user.username,
-			});
+			api.put(`/chats/${roomId}/typing`, { typing }).catch(alerts.error);
 		}
 
 		textarea.on('focus', () => textarea.val() && emitTyping(true));
@@ -625,6 +697,12 @@ define('forum/chats', [
 				data.message.timestamp = Math.min(Date.now(), data.message.timestamp);
 				data.message.timestampISO = utils.toISOString(data.message.timestamp);
 				messages.appendChatMessage($('[component="chat/message/content"]'), data.message);
+
+				Chats.updateTeaser(data.roomId, {
+					content: utils.stripHTMLTags(utils.decodeHTMLEntities(data.message.content)),
+					user: data.message.fromUser,
+					timestampISO: data.message.timestampISO,
+				});
 			}
 		});
 
@@ -675,11 +753,36 @@ define('forum/chats', [
 		});
 
 		socket.on('event:chats.typing', async (data) => {
-			if (chatModule.isFromBlockedUser(data.uid)) {
+			if (data.uid === app.user.uid || chatModule.isFromBlockedUser(data.uid)) {
 				return;
 			}
 			chatModule.updateTypingUserList($(`[component="chat/main-wrapper"][data-roomid="${data.roomId}"]`), data);
 		});
+	};
+
+	Chats.updateTeaser = async function (roomId, teaser) {
+		if (!ajaxify.data.template.chats || !app.user.userslug) {
+			return;
+		}
+		const roomEl = chatNavWrapper.find(`[data-roomid="${roomId}"]`);
+		if (roomEl.length) {
+			const html = await app.parseAndTranslate('partials/chats/room-teaser', {
+				teaser: teaser,
+			});
+			roomEl.find('[component="chat/room/teaser"]').html(html[0].outerHTML);
+			roomEl.find('.timeago').timeago();
+		} else {
+			const { rooms } = await api.get(`/chats`, { start: 0, perPage: 2 });
+			const room = rooms.find(r => parseInt(r.roomId, 10) === parseInt(roomId, 10));
+			if (room) {
+				const recentEl = components.get('chat/recent');
+				const html = await app.parseAndTranslate('chats', 'rooms', {
+					rooms: [room],
+					showBottomHr: true,
+				});
+				recentEl.prepend(html);
+			}
+		}
 	};
 
 	Chats.markChatPageElUnread = function (data) {

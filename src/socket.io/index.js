@@ -14,6 +14,8 @@ const logger = require('../logger');
 const plugins = require('../plugins');
 const ratelimit = require('../middleware/ratelimit');
 const blacklist = require('../meta/blacklist');
+const als = require('../als');
+const apiHelpers = require('../api/helpers');
 
 const Namespaces = Object.create(null);
 
@@ -88,8 +90,7 @@ function onConnection(socket) {
 	onConnect(socket);
 	socket.onAny((event, ...args) => {
 		const payload = { event: event, ...deserializePayload(args) };
-		const als = require('../als');
-		const apiHelpers = require('../api/helpers');
+
 		als.run({
 			uid: socket.uid,
 			req: apiHelpers.buildReqObject(socket, payload),
@@ -131,10 +132,10 @@ async function onConnect(socket) {
 		return;
 	}
 
-	if (socket.uid) {
+	if (socket.uid > 0) {
 		socket.join(`uid_${socket.uid}`);
 		socket.join('online_users');
-	} else {
+	} else if (socket.uid === 0) {
 		socket.join('online_guests');
 	}
 
@@ -329,5 +330,9 @@ Sockets.warnDeprecated = (socket, replacement) => {
 			replacement: replacement,
 		});
 	}
-	winston.warn(`[deprecated]\n ${new Error('-').stack.split('\n').slice(2, 5).join('\n')}\n     use ${replacement}`);
+	winston.warn([
+		'[deprecated]',
+		`${new Error('-').stack.split('\n').slice(2, 5).join('\n')}`,
+		`      ${replacement ? `use ${replacement}` : 'there is no replacement for this call.'}`,
+	].join('\n'));
 };

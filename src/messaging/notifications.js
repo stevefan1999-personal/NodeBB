@@ -1,6 +1,7 @@
 'use strict';
 
 const winston = require('winston');
+const validator = require('validator');
 
 const batch = require('../batch');
 const db = require('../database');
@@ -8,6 +9,7 @@ const notifications = require('../notifications');
 const user = require('../user');
 const io = require('../socket.io');
 const plugins = require('../plugins');
+const utils = require('../utils');
 
 module.exports = function (Messaging) {
 	Messaging.setUserNotificationSetting = async (uid, roomId, value) => {
@@ -66,6 +68,13 @@ module.exports = function (Messaging) {
 		// push unread count only for private rooms
 		if (!isPublic) {
 			const uids = await Messaging.getAllUidsInRoomFromSet(`chat:room:${roomId}:uids:online`);
+			unreadData.teaser = {
+				content: validator.escape(
+					String(utils.stripHTMLTags(utils.decodeHTMLEntities(messageObj.content)))
+				),
+				user: messageObj.fromUser,
+				timestampISO: messageObj.timestampISO,
+			};
 			Messaging.pushUnreadCount(uids, unreadData);
 		}
 
@@ -79,9 +88,10 @@ module.exports = function (Messaging) {
 	async function sendNotification(fromUid, roomId, messageObj) {
 		fromUid = parseInt(fromUid, 10);
 
-		const [settings, roomData] = await Promise.all([
+		const [settings, roomData, realtimeUids] = await Promise.all([
 			db.getObject(`chat:room:${roomId}:notification:settings`),
 			Messaging.getRoomData(roomId),
+			io.getUidsInRoom(`chat_room_${roomId}`),
 		]);
 		const roomDefault = roomData.notificationSetting;
 		const uidsToNotify = [];
@@ -89,7 +99,8 @@ module.exports = function (Messaging) {
 		await batch.processSortedSet(`chat:room:${roomId}:uids:online`, async (uids) => {
 			uids = uids.filter(
 				uid => (parseInt((settings && settings[uid]) || roomDefault, 10) === ALLMESSAGES) &&
-					fromUid !== parseInt(uid, 10)
+					fromUid !== parseInt(uid, 10) &&
+					!realtimeUids.includes(parseInt(uid, 10))
 			);
 			const hasRead = await Messaging.hasRead(uids, roomId);
 			uidsToNotify.push(...uids.filter((uid, index) => !hasRead[index]));

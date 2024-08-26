@@ -25,7 +25,7 @@ ajaxify.widgets = { render: render };
 	}
 	ajaxify.go = function (url, callback, quiet) {
 		// Automatically reconnect to socket and re-ajaxify on success
-		if (!socket.connected) {
+		if (!socket.connected && parseInt(app.user.uid, 10) >= 0) {
 			app.reconnect();
 
 			if (ajaxify.reconnectAction) {
@@ -150,7 +150,7 @@ ajaxify.widgets = { render: render };
 
 		if (data) {
 			let status = parseInt(data.status, 10);
-			if ([400, 403, 404, 500, 502, 504].includes(status)) {
+			if ([400, 403, 404, 500, 502, 503].includes(status)) {
 				if (status === 502 && retry) {
 					retry = false;
 					ajaxifyTimer = undefined;
@@ -472,6 +472,20 @@ ajaxify.widgets = { render: render };
 		hooks.fire('action:ajaxify.cleanup', { url, tpl_url });
 	};
 
+	ajaxify.handleTransientElements = () => {
+		// todo: modals?
+
+		const elements = ['[component="notifications"]', '[component="chat/dropdown"]', '[component="sidebar/drafts"]', '[component="header/avatar"]']
+			.map(el => document.querySelector(`${el} .dropdown-menu.show`) || document.querySelector(`${el} + .dropdown-menu.show`))
+			.filter(Boolean);
+
+		if (elements.length) {
+			elements.forEach((el) => {
+				el.classList.remove('show');
+			});
+		}
+	};
+
 	translator.translate('[[error:no-connection]]');
 	translator.translate('[[error:socket-reconnect-failed]]');
 	translator.translate(`[[global:reconnecting-message, ${config.siteTitle}]]`);
@@ -482,15 +496,14 @@ ajaxify.widgets = { render: render };
 }());
 
 $(document).ready(function () {
-	$(window).on('popstate', function (ev) {
-		ev = ev.originalEvent;
-
+	window.addEventListener('popstate', (ev) => {
 		if (ev !== null && ev.state) {
 			if (ev.state.url === null && ev.state.returnPath !== undefined) {
 				window.history.replaceState({
 					url: ev.state.returnPath,
 				}, ev.state.returnPath, config.relative_path + '/' + ev.state.returnPath);
 			} else if (ev.state.url !== undefined) {
+				ajaxify.handleTransientElements();
 				ajaxify.go(ev.state.url, function () {
 					hooks.fire('action:popstate', { url: ev.state.url });
 				}, true);

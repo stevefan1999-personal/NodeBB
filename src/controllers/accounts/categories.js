@@ -9,7 +9,8 @@ const meta = require('../../meta');
 const categoriesController = module.exports;
 
 categoriesController.get = async function (req, res) {
-	const { username, userslug } = await user.getUserFields(res.locals.uid, ['username', 'userslug']);
+	const payload = res.locals.userData;
+	const { username, userslug } = payload;
 	const [states, allCategoriesData] = await Promise.all([
 		user.getCategoryWatchState(res.locals.uid),
 		categories.buildForSelect(res.locals.uid, 'find', ['descriptionParsed', 'depth', 'slug']),
@@ -24,13 +25,13 @@ categoriesController.get = async function (req, res) {
 
 	categoriesData.forEach((category) => {
 		if (category) {
-			category.isIgnored = states[category.cid] === categories.watchStates.ignoring;
 			category.isWatched = states[category.cid] === categories.watchStates.watching;
+			category.isTracked = states[category.cid] === categories.watchStates.tracking;
 			category.isNotWatched = states[category.cid] === categories.watchStates.notwatching;
+			category.isIgnored = states[category.cid] === categories.watchStates.ignoring;
 		}
 	});
 
-	const payload = {};
 	payload.categories = categoriesData;
 	payload.title = `[[pages:account/watched-categories, ${username}]]`;
 	payload.breadcrumbs = helpers.buildBreadcrumbs([

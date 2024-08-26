@@ -16,6 +16,7 @@ app = window.app || {};
 		reconnectionAttempts: config.maxReconnectionAttempts,
 		reconnectionDelay: config.reconnectionDelay,
 		transports: config.socketioTransports,
+		autoConnect: false,
 		path: config.relative_path + '/socket.io',
 		query: {
 			_csrf: config.csrf_token,
@@ -48,11 +49,12 @@ app = window.app || {};
 		hooks = _hooks;
 		if (parseInt(app.user.uid, 10) >= 0) {
 			addHandlers();
+			socket.connect();
 		}
 	});
 
 	window.app.reconnect = () => {
-		if (socket.connected) {
+		if (socket.connected || parseInt(app.user.uid, 10) < 0) {
 			return;
 		}
 
@@ -111,8 +113,8 @@ app = window.app || {};
 				alerts.alert(params);
 			});
 		});
-		socket.on('event:deprecated_call', function (data) {
-			console.warn('[socket.io] ', data.eventName, 'is now deprecated in favour of', data.replacement);
+		socket.on('event:deprecated_call', (data) => {
+			console.warn('[socket.io]', data.eventName, 'is now deprecated', data.replacement ? `in favour of ${data.replacement}` : 'with no alternative planned.');
 		});
 
 		socket.on('event:livereload', function () {

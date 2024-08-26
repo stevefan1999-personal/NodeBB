@@ -43,7 +43,7 @@
 	"registration-type.admin-invite-only": "Uniquement sur invitation d'un admin",
 	"registration-type.disabled": "Pas d'inscription",
 	"registration-type.help": "Normal - Les utilisateurs peuvent s'inscrire à partir de la page d'inscription. <br/>\nUniquement sur invitation - Les utilisateurs peuvent inviter d'autres personnes à partir de la <a href=\"%1/users\" target=\"_blank\">page des utilisateurs</a>.<br/>\nInvitation administrateur uniquement - Seuls les administrateurs peuvent inviter d'autres personnes à partir des <a href=\"%1/users\" target=\"_blank\">pages des utilisateurs</a> et des <a href=\"%1/admin/manage/users\">pages d'administration</a>.<br/>\nAucune inscription - Aucune inscription d'utilisateur.<br/>",
-	"registration-approval-type.help": "Normal - Les utilisateurs sont enregistrés immédiatement.<br/>\nApprobation de l'administrateur - Les inscriptions des utilisateurs sont placées dans une <a href=\"%1/admin/manage/registration\">file d'attente d'approbation</a> pour les administrateurs.<br/>\nApprobation par adresses IP pour les nouveaux utilisateurs, Approbation de l'administrateur pour les adresses IP ayant déjà un compte.<br/>",
+	"registration-approval-type.help": "Normal - Les utilisateurs sont enregistrés immédiatement.<br/>\nApprobation de l'administrateur - Les inscriptions des utilisateurs sont placées dans une <a href=\"%1/admin/manage/registration\">file d'attente d'approbation</a> pour les administrateurs.<br/>\nApprobation par adresses IP pour les nouveaux utilisateurs - Approbation de l'administrateur pour les adresses IP ayant déjà un compte.<br/>",
 	"registration-queue-auto-approve-time": "Délai d'approbation automatique",
 	"registration-queue-auto-approve-time-help": "Heures avant l'approbation automatique de l'utilisateur. 0 pour désactiver.",
 	"registration-queue-show-average-time": "Afficher aux utilisateurs le temps moyen nécessaire d'approbation",
@@ -79,7 +79,14 @@
 	"follow-replied-topics": "S'abonner aux sujets auxquels vous répondez",
 	"default-notification-settings": "Paramètres des notifications par défaut",
 	"categoryWatchState": "Abonnement par défaut",
-	"categoryWatchState.watching": "Abonné",
+	"categoryWatchState.tracking": "Suivi",
 	"categoryWatchState.notwatching": "Non abonné",
-	"categoryWatchState.ignoring": "Ignoré"
+	"categoryWatchState.ignoring": "Ignoré",
+	"restrictions-new": "Restrictions des nouveaux utilisateurs",
+	"restrictions.rep-threshold": "Seuil de réputation avant que ces restrictions ne soient levées",
+	"restrictions.seconds-between-new": "Secondes entre les messages pour les nouveaux utilisateurs",
+	"restrictions.seconds-before-new": "Quelques secondes avant qu'un nouvel utilisateur puisse publier son premier message",
+	"restrictions.seconds-edit-after-new": "Nombre de secondes pendant lesquelles une publication reste modifiable (définissez la valeur sur 0 pour la désactiver)",
+	"restrictions.milliseconds-between-messages": "Temps entre chaque message de discussion (en millisecondes)",
+	"restrictions.groups-exempt-from-new-user-restrictions": "Sélectionnez les groupes qui devraient être exemptés des nouvelles restrictions d'utilisateur"
 }

@@ -32,7 +32,7 @@ define('forum/account/header', [
 		components.get('account/unfollow').on('click', () => toggleFollow('unfollow'));
 
 		components.get('account/chat').on('click', async function () {
-			const roomId = await socket.emit('modules.chats.hasPrivateChat', ajaxify.data.uid);
+			const { roomId } = await api.get(`/users/${ajaxify.data.uid}/chat`);
 			const chat = await app.require('chat');
 			if (roomId) {
 				chat.openChat(roomId);
@@ -56,8 +56,8 @@ define('forum/account/header', [
 		components.get('account/delete-content').on('click', () => AccountsDelete.content(ajaxify.data.theirid));
 		components.get('account/delete-all').on('click', () => AccountsDelete.purge(ajaxify.data.theirid));
 		components.get('account/flag').on('click', flagAccount);
-		components.get('account/block').on('click', toggleBlockAccount);
-		components.get('account/unblock').on('click', toggleBlockAccount);
+		components.get('account/block').on('click', () => toggleBlockAccount('block'));
+		components.get('account/unblock').on('click', () => toggleBlockAccount('unblock'));
 	};
 
 	function selectActivePill() {
@@ -129,10 +129,11 @@ define('forum/account/header', [
 		});
 	}
 
-	function toggleBlockAccount() {
+	function toggleBlockAccount(action) {
 		socket.emit('user.toggleBlock', {
 			blockeeUid: ajaxify.data.uid,
 			blockerUid: app.user.uid,
+			action,
 		}, function (err, blocked) {
 			if (err) {
 				return alerts.error(err);

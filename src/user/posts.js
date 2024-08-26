@@ -3,6 +3,8 @@
 const db = require('../database');
 const meta = require('../meta');
 const privileges = require('../privileges');
+const plugins = require('../plugins');
+const groups = require('../groups');
 
 module.exports = function (User) {
 	User.isReadyToPost = async function (uid, cid) {
@@ -31,9 +33,10 @@ module.exports = function (User) {
 		if (parseInt(uid, 10) === 0) {
 			return;
 		}
-		const [userData, isAdminOrMod] = await Promise.all([
+		const [userData, isAdminOrMod, isMemberOfExempt] = await Promise.all([
 			User.getUserFields(uid, ['uid', 'mutedUntil', 'joindate', 'email', 'reputation'].concat([field])),
 			privileges.categories.isAdminOrMod(cid, uid),
+			groups.isMemberOfAny(uid, meta.config.groupsExemptFromNewUserRestrictions),
 		]);
 
 		if (!userData.uid) {
@@ -46,6 +49,18 @@ module.exports = function (User) {
 
 		await User.checkMuted(uid);
 
+		const { shouldIgnoreDelays } = await plugins.hooks.fire('filter:user.posts.isReady', {
+			shouldIgnoreDelays: false,
+			user: userData,
+			cid,
+			field,
+			isAdminOrMod,
+			isMemberOfExempt,
+		});
+		if (shouldIgnoreDelays) {
+			return;
+		}
+
 		const now = Date.now();
 		if (now - userData.joindate < meta.config.initialPostDelay * 1000) {
 			throw new Error(`[[error:user-too-new, ${meta.config.initialPostDelay}]]`);
@@ -54,11 +69,16 @@ module.exports = function (User) {
 		const lasttime = userData[field] || 0;
 
 		if (
+			!isMemberOfExempt &&
 			meta.config.newbiePostDelay > 0 &&
-			meta.config.newbiePostDelayThreshold > userData.reputation &&
+			meta.config.newbieReputationThreshold > userData.reputation &&
 			now - lasttime < meta.config.newbiePostDelay * 1000
 		) {
-			throw new Error(`[[error:too-many-posts-newbie, ${meta.config.newbiePostDelay}, ${meta.config.newbiePostDelayThreshold}]]`);
+			if (meta.config.newbiewPostDelay % 60 === 0) {
+				throw new Error(`[[error:too-many-posts-newbie-minutes, ${Math.floor(meta.config.newbiePostDelay / 60)}, ${meta.config.newbieReputationThreshold}]]`);
+			} else {
+				throw new Error(`[[error:too-many-posts-newbie, ${meta.config.newbiePostDelay}, ${meta.config.newbieReputationThreshold}]]`);
+			}
 		} else if (now - lasttime < meta.config.postDelay * 1000) {
 			throw new Error(`[[error:too-many-posts, ${meta.config.postDelay}]]`);
 		}

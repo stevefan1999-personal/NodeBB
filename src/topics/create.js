@@ -46,6 +46,7 @@ module.exports = function (Topics) {
 		const timestampedSortedSetKeys = [
 			'topics:tid',
 			`cid:${topicData.cid}:tids`,
+			`cid:${topicData.cid}:tids:create`,
 			`cid:${topicData.cid}:uid:${topicData.uid}:tids`,
 		];
 
@@ -153,6 +154,7 @@ module.exports = function (Topics) {
 		if (parseInt(uid, 10) && !topicData.scheduled) {
 			user.notifications.sendTopicNotificationToFollowers(uid, topicData, postData);
 			Topics.notifyTagFollowers(postData, uid);
+			categories.notifyCategoryFollowers(postData, uid);
 		}
 
 		return {
@@ -223,7 +225,6 @@ module.exports = function (Topics) {
 
 	async function onNewPost(postData, data) {
 		const { tid, uid } = postData;
-		await Topics.markCategoryUnreadForAll(tid);
 		await Topics.markAsRead([tid], uid);
 		const [
 			userInfo,

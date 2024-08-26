@@ -157,33 +157,39 @@ module.exports = function (module) {
 			query.score.$lte = max;
 		}
 
-		const count = await module.client.collection('objects').countDocuments(query);
-		return count || 0;
+		return await module.client.collection('objects').countDocuments(query);
 	};
 
 	module.sortedSetCard = async function (key) {
 		if (!key) {
 			return 0;
 		}
-		const count = await module.client.collection('objects').countDocuments({ _key: key });
-		return parseInt(count, 10) || 0;
+		return await module.client.collection('objects').countDocuments({ _key: key });
 	};
 
 	module.sortedSetsCard = async function (keys) {
 		if (!Array.isArray(keys) || !keys.length) {
 			return [];
 		}
-		const promises = keys.map(k => module.sortedSetCard(k));
-		return await Promise.all(promises);
+		return await Promise.all(keys.map(module.sortedSetCard));
 	};
 
-	module.sortedSetsCardSum = async function (keys) {
-		if (!keys || (Array.isArray(keys) && !keys.length)) {
+	module.sortedSetsCardSum = async function (keys, min = '-inf', max = '+inf') {
+		const isArray = Array.isArray(keys);
+		if (!keys || (isArray && !keys.length)) {
 			return 0;
 		}
 
-		const count = await module.client.collection('objects').countDocuments({ _key: Array.isArray(keys) ? { $in: keys } : keys });
-		return parseInt(count, 10) || 0;
+		const query = { _key: isArray ? { $in: keys } : keys };
+		if (min !== '-inf') {
+			query.score = { $gte: min };
+		}
+		if (max !== '+inf') {
+			query.score = query.score || {};
+			query.score.$lte = max;
+		}
+
+		return await module.client.collection('objects').countDocuments(query);
 	};
 
 	module.sortedSetRank = async function (key, value) {
@@ -568,7 +574,17 @@ module.exports = function (module) {
 		if (!options.withScores) {
 			project.score = 0;
 		}
-		const cursor = await module.client.collection('objects').find({ _key: setKey }, { projection: project })
+		const query = { _key: setKey };
+		if (options.min && options.min !== '-inf') {
+			query.score = { $gte: parseFloat(options.min) };
+		}
+		if (options.max && options.max !== '+inf') {
+			query.score = query.score || {};
+			query.score.$lte = parseFloat(options.max);
+		}
+
+		const cursor = await module.client.collection('objects')
+			.find(query, { projection: project })
 			.sort({ score: sort })
 			.batchSize(options.batch);
 
